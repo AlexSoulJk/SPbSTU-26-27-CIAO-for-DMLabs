@@ -1,6 +1,12 @@
 """Публичные компоненты компиляции и исполнения."""
 
-from .compiler import AutomatonDefinition, CompiledProgram, compile_program
+from .compiler import (
+    AutomatonDefinition,
+    CompiledProgram,
+    OperationParameter,
+    OperationSignature,
+    compile_program,
+)
 from .errors import (
     ActionExecutionError,
     AmbiguousTransitionError,
@@ -34,6 +40,8 @@ __all__ = [
     "InvalidRuntimeCallError",
     "ModelValidationError",
     "NoTransitionError",
+    "OperationParameter",
+    "OperationSignature",
     "QueryRoutingError",
     "RunResult",
     "RunStatus",

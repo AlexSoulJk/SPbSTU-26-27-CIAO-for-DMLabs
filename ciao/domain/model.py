@@ -4,14 +4,16 @@ from __future__ import annotations
 
 from copy import deepcopy
 from dataclasses import dataclass
+from enum import Enum
 from typing import Any, Generic, Protocol, TypeVar, get_args, get_origin
 
 
 class State:
     """Именованное управляющее состояние автоматного класса."""
 
-    def __init__(self, *, initial: bool = False) -> None:
+    def __init__(self, *, initial: bool = False, final: bool = False) -> None:
         self.initial = initial
+        self.final = final
         self.name = "<unnamed>"
         self.owner: type[Any] | None = None
 
@@ -28,7 +30,10 @@ class State:
         return f"{owner_name}.{self.name}"
 
     def __repr__(self) -> str:
-        return f"State({self.qualified_name}, initial={self.initial})"
+        return (
+            f"State({self.qualified_name}, initial={self.initial}, "
+            f"final={self.final})"
+        )
 
 
 class RuntimeServices(Protocol):
@@ -78,20 +83,31 @@ ContextT = TypeVar("ContextT", bound=AutomatonContext)
 ResultT = TypeVar("ResultT")
 
 
+class AutomatonRole(str, Enum):
+    """Явная роль автоматного класса для внешних представлений."""
+
+    BASE = "base"
+    CONTROLLER = "controller"
+    VIEW = "view"
+
+
 class Automaton(Generic[ContextT]):
     """Базовый класс декларативного автомата с типизированным контекстом."""
 
     _context_type: type[AutomatonContext] | None = None
+    role = AutomatonRole.BASE
 
     def __init_subclass__(cls, **kwargs: Any) -> None:
         super().__init_subclass__(**kwargs)
         for base in getattr(cls, "__orig_bases__", ()):
-            if get_origin(base) is Automaton:
-                context_type = get_args(base)[0]
-                if isinstance(context_type, type) and issubclass(
-                    context_type, AutomatonContext
-                ):
-                    cls._context_type = context_type
+            origin = get_origin(base)
+            if not isinstance(origin, type) or not issubclass(origin, Automaton):
+                continue
+            context_type = get_args(base)[0]
+            if isinstance(context_type, type) and issubclass(
+                context_type, AutomatonContext
+            ):
+                cls._context_type = context_type
                 break
 
     def emit(
@@ -117,6 +133,18 @@ class Automaton(Generic[ContextT]):
         """Синхронно выполняет требуемый запрос через Connection."""
 
         return ctx._ciao_runtime_services().query(ctx, operation, *args, **kwargs)
+
+
+class ControllerAutomaton(Automaton[ContextT], Generic[ContextT]):
+    """Автомат роли Controller; роль не меняет семантику исполнения."""
+
+    role = AutomatonRole.CONTROLLER
+
+
+class ViewAutomaton(Automaton[ContextT], Generic[ContextT]):
+    """Автомат роли View; роль не меняет семантику исполнения."""
+
+    role = AutomatonRole.VIEW
 
 
 @dataclass(frozen=True, eq=False)

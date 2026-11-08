@@ -10,13 +10,14 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 
 from ciao import (
-    Automaton,
     AutomatonContext,
     AutomatonObject,
     Connection,
+    ControllerAutomaton,
     Program,
     Runtime,
     State,
+    ViewAutomaton,
     action,
     guard,
     provided_command,
@@ -37,16 +38,16 @@ class SumContext(AutomatonContext):
     tick_count: int = 0
 
 
-class SumController(Automaton[SumContext]):
+class SumController(ControllerAutomaton[SumContext]):
     """Пошагово вычисляет сумму и публикует снимки для представления."""
 
     # Управляющие состояния принадлежат описанию автоматного класса.
     idle = State(initial=True)
     running = State()
-    done = State()
+    done = State(final=True)
 
     # PROVIDED-команды являются событиями переходов.
-    @provided_command
+    @provided_command(external=True)
     def start(self, values: Sequence[int]) -> None:
         ...
 
@@ -179,7 +180,7 @@ class ViewContext(AutomatonContext):
     tick_count: int = 0
 
 
-class SumView(Automaton[ViewContext]):
+class SumView(ViewAutomaton[ViewContext]):
     """Минимальный автомат представления без зависимости от Tkinter."""
 
     ready = State(initial=True)

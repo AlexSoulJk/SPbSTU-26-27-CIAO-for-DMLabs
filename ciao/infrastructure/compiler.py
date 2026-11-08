@@ -8,11 +8,39 @@ from types import MappingProxyType, NoneType
 from typing import Any, Mapping, get_type_hints
 
 from ciao.domain.connections import Endpoint
-from ciao.domain.model import Automaton, AutomatonContext, AutomatonObject, Program, State
+from ciao.domain.model import (
+    Automaton,
+    AutomatonContext,
+    AutomatonObject,
+    AutomatonRole,
+    ControllerAutomaton,
+    Program,
+    State,
+    ViewAutomaton,
+)
 from ciao.domain.operations import Operation, OperationDirection, OperationKind
 from ciao.domain.transition import Action, Behavior, Guard, Transition
 
 from .errors import ModelValidationError
+
+
+@dataclass(frozen=True)
+class OperationParameter:
+    """Разрешённый параметр полезной нагрузки операции."""
+
+    name: str
+    kind: Any
+    annotation: Any
+    has_default: bool
+    default: Any = None
+
+
+@dataclass(frozen=True)
+class OperationSignature:
+    """Проверенная сигнатура операции без служебных ``self`` и ``ctx``."""
+
+    parameters: tuple[OperationParameter, ...]
+    return_type: Any
 
 
 @dataclass(frozen=True)
@@ -21,9 +49,11 @@ class AutomatonDefinition:
 
     automaton_type: type[Automaton[Any]]
     context_type: type[AutomatonContext]
+    role: AutomatonRole
     states: tuple[State, ...]
     initial_state: State
     operations: tuple[Operation, ...]
+    operation_signatures: Mapping[Operation, OperationSignature]
     guards: tuple[Guard, ...]
     actions: tuple[Action, ...]
     transitions: tuple[Transition, ...]
@@ -104,38 +134,59 @@ def _validate_behavior(
             )
 
 
-def _resolved_payload(operation: Operation) -> tuple[tuple[Parameter, Any], ...]:
+def _compile_operation_signature(
+    operation: Operation,
+    context_type: type[AutomatonContext],
+) -> OperationSignature:
+    """Один раз разрешает аннотации операции для всех последующих потребителей."""
+
     owner = operation.owner
     if owner is None:
         raise ModelValidationError(f"Операция {operation.name} не привязана к классу")
     hints = _type_hints(operation.function, owner)
-    result: list[tuple[Parameter, Any]] = []
+    parameters = _function_parameters(operation.function)
+    if parameters and parameters[0].name == "ctx":
+        if hints.get("ctx", _empty) is not context_type:
+            raise ModelValidationError(
+                f"{operation.qualified_name} должен использовать "
+                f"контекст {context_type.__name__}"
+            )
+
+    result: list[OperationParameter] = []
     for parameter in operation.payload_signature.parameters.values():
         if parameter.kind is Parameter.POSITIONAL_ONLY:
             raise ModelValidationError(
                 f"{operation.qualified_name}: positional-only параметры не поддерживаются"
             )
-        result.append((parameter, hints.get(parameter.name, parameter.annotation)))
-    return tuple(result)
-
-
-def _resolved_return(operation: Operation) -> Any:
-    owner = operation.owner
-    if owner is None:
-        return operation.return_annotation
-    return _type_hints(operation.function, owner).get("return", operation.return_annotation)
+        result.append(
+            OperationParameter(
+                name=parameter.name,
+                kind=parameter.kind,
+                annotation=hints.get(parameter.name, parameter.annotation),
+                has_default=parameter.default is not _empty,
+                default=None if parameter.default is _empty else parameter.default,
+            )
+        )
+    return OperationSignature(
+        parameters=tuple(result),
+        return_type=hints.get("return", operation.return_annotation),
+    )
 
 
 def _validate_handler_for_event(
     behavior: Behavior,
     event: Operation,
+    event_signature: OperationSignature,
 ) -> None:
     owner = behavior.owner
     if owner is None:
         raise ModelValidationError(f"Обработчик {behavior.name} не привязан к классу")
     hints = _type_hints(behavior.function, owner)
     parameters = _function_parameters(behavior.function)[1:]
-    event_parameters = {parameter.name: annotation for parameter, annotation in _resolved_payload(event)}
+    event_parameters = {
+        parameter.name: parameter.annotation
+        for parameter in event_signature.parameters
+    }
     for parameter in parameters:
         if parameter.name not in event_parameters:
             raise ModelValidationError(
@@ -164,26 +215,42 @@ def _compile_automaton(automaton_type: type[Automaton[Any]]) -> AutomatonDefinit
     actions = _declared_members(automaton_type, Action)
     transitions = _declared_members(automaton_type, Transition)
 
+    is_controller = issubclass(automaton_type, ControllerAutomaton)
+    is_view = issubclass(automaton_type, ViewAutomaton)
+    if is_controller and is_view:
+        raise ModelValidationError(
+            f"{automaton_type.__name__} не может одновременно иметь роли Controller и View"
+        )
+    if is_controller:
+        expected_role = AutomatonRole.CONTROLLER
+    elif is_view:
+        expected_role = AutomatonRole.VIEW
+    else:
+        expected_role = AutomatonRole.BASE
+    if getattr(automaton_type, "role", None) is not expected_role:
+        raise ModelValidationError(
+            f"{automaton_type.__name__}: роль задаётся выбором базового класса, "
+            "а не переопределением атрибута role"
+        )
+
     initial_states = tuple(state for state in states if state.initial)
     if len(initial_states) != 1:
         raise ModelValidationError(
             f"{automaton_type.__name__} должен иметь ровно одно начальное состояние"
         )
 
+    operation_signatures: dict[Operation, OperationSignature] = {}
     for operation in operations:
-        parameters = _function_parameters(operation.function)
-        if parameters and parameters[0].name == "ctx":
-            hints = _type_hints(operation.function, automaton_type)
-            if hints.get("ctx", _empty) is not context_type:
-                raise ModelValidationError(
-                    f"{operation.qualified_name} должен использовать "
-                    f"контекст {context_type.__name__}"
-                )
-        _resolved_payload(operation)
-        return_type = _resolved_return(operation)
+        operation_signature = _compile_operation_signature(operation, context_type)
+        operation_signatures[operation] = operation_signature
+        return_type = operation_signature.return_type
         if operation.kind is OperationKind.COMMAND and return_type not in (_empty, None, NoneType):
             raise ModelValidationError(
                 f"Команда {operation.qualified_name} должна возвращать None"
+            )
+        if operation.external and operation.direction is not OperationDirection.PROVIDED:
+            raise ModelValidationError(
+                f"{operation.qualified_name}: external разрешён только для provided-операций"
             )
 
     for item in guards:
@@ -214,20 +281,30 @@ def _compile_automaton(automaton_type: type[Automaton[Any]]) -> AutomatonDefinit
                 raise ModelValidationError(
                     f"{item.qualified_name}: Guard должен принадлежать автомату"
                 )
-            _validate_handler_for_event(item.guard, item.event)
+            _validate_handler_for_event(
+                item.guard,
+                item.event,
+                operation_signatures[item.event],
+            )
         for action_item in item.actions:
             if action_item not in actions:
                 raise ModelValidationError(
                     f"{item.qualified_name}: Action должен принадлежать автомату"
                 )
-            _validate_handler_for_event(action_item, item.event)
+            _validate_handler_for_event(
+                action_item,
+                item.event,
+                operation_signatures[item.event],
+            )
 
     return AutomatonDefinition(
         automaton_type=automaton_type,
         context_type=context_type,
+        role=expected_role,
         states=states,
         initial_state=initial_states[0],
         operations=operations,
+        operation_signatures=MappingProxyType(operation_signatures),
         guards=guards,
         actions=actions,
         transitions=transitions,
@@ -245,14 +322,19 @@ def _validate_endpoint(endpoint: Endpoint, program: Program) -> None:
         )
 
 
-def _validate_signature(required: Operation, provided: Operation) -> None:
-    required_parameters = _resolved_payload(required)
-    provided_parameters = _resolved_payload(provided)
+def _validate_signature(
+    required: Operation,
+    required_signature: OperationSignature,
+    provided: Operation,
+    provided_signature: OperationSignature,
+) -> None:
+    required_parameters = required_signature.parameters
+    provided_parameters = provided_signature.parameters
     if len(required_parameters) != len(provided_parameters):
         raise ModelValidationError(
             f"Несовместимые сигнатуры {required.qualified_name} и {provided.qualified_name}"
         )
-    for (required_parameter, required_type), (provided_parameter, provided_type) in zip(
+    for required_parameter, provided_parameter in zip(
         required_parameters,
         provided_parameters,
         strict=True,
@@ -262,14 +344,18 @@ def _validate_signature(required: Operation, provided: Operation) -> None:
                 f"Несовместимые виды параметров {required.qualified_name} "
                 f"и {provided.qualified_name}"
             )
-        if required_type is not _empty and provided_type is not _empty and required_type != provided_type:
+        if (
+            required_parameter.annotation is not _empty
+            and provided_parameter.annotation is not _empty
+            and required_parameter.annotation != provided_parameter.annotation
+        ):
             raise ModelValidationError(
                 f"Несовместимые типы параметров {required.qualified_name} "
                 f"и {provided.qualified_name}"
             )
     if required.kind is OperationKind.QUERY:
-        required_return = _resolved_return(required)
-        provided_return = _resolved_return(provided)
+        required_return = required_signature.return_type
+        provided_return = provided_signature.return_type
         if (
             required_return is not _empty
             and provided_return is not _empty
@@ -292,10 +378,10 @@ def compile_program(program: Program) -> CompiledProgram:
 
     definitions: dict[type[Automaton[Any]], AutomatonDefinition] = {}
     for object_ref in program.objects:
-        definition = definitions.setdefault(
-            object_ref.automaton,
-            _compile_automaton(object_ref.automaton),
-        )
+        definition = definitions.get(object_ref.automaton)
+        if definition is None:
+            definition = _compile_automaton(object_ref.automaton)
+            definitions[object_ref.automaton] = definition
         if type(object_ref.initial_context) is not definition.context_type:
             raise ModelValidationError(
                 f"Объект {object_ref.name} ожидает {definition.context_type.__name__}, "
@@ -318,7 +404,14 @@ def compile_program(program: Program) -> CompiledProgram:
             raise ModelValidationError(
                 f"Для {required.object.name}.{required.operation.name} задано несколько связей"
             )
-        _validate_signature(required.operation, provided.operation)
+        required_definition = definitions[required.object.automaton]
+        provided_definition = definitions[provided.object.automaton]
+        _validate_signature(
+            required.operation,
+            required_definition.operation_signatures[required.operation],
+            provided.operation,
+            provided_definition.operation_signatures[provided.operation],
+        )
         routes[required] = provided
 
     for object_ref in program.objects:

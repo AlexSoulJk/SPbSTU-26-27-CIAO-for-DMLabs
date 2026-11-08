@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from enum import Enum
 from inspect import Parameter, Signature, signature
-from typing import Any, Callable
+from typing import Any, Callable, overload
 
 
 class OperationKind(str, Enum):
@@ -30,10 +30,12 @@ class Operation:
         *,
         kind: OperationKind,
         direction: OperationDirection,
+        external: bool = False,
     ) -> None:
         self.function = function
         self.kind = kind
         self.direction = direction
+        self.external = external
         self.name = function.__name__
         self.owner: type[Any] | None = None
         self.__doc__ = function.__doc__
@@ -80,7 +82,7 @@ class Operation:
     def __repr__(self) -> str:
         return (
             f"Operation({self.qualified_name}, "
-            f"{self.direction.value} {self.kind.value})"
+            f"{self.direction.value} {self.kind.value}, external={self.external})"
         )
 
 
@@ -89,18 +91,48 @@ def _operation(
     *,
     kind: OperationKind,
     direction: OperationDirection,
+    external: bool = False,
 ) -> Operation:
-    return Operation(function, kind=kind, direction=direction)
+    return Operation(
+        function,
+        kind=kind,
+        direction=direction,
+        external=external,
+    )
 
 
-def provided_command(function: Callable[..., Any]) -> Operation:
+@overload
+def provided_command(
+    function: Callable[..., Any],
+    *,
+    external: bool = False,
+) -> Operation: ...
+
+
+@overload
+def provided_command(
+    function: None = None,
+    *,
+    external: bool = False,
+) -> Callable[[Callable[..., Any]], Operation]: ...
+
+
+def provided_command(
+    function: Callable[..., Any] | None = None,
+    *,
+    external: bool = False,
+) -> Operation | Callable[[Callable[..., Any]], Operation]:
     """Объявляет команду, предоставляемую автоматным классом."""
 
-    return _operation(
-        function,
-        kind=OperationKind.COMMAND,
-        direction=OperationDirection.PROVIDED,
-    )
+    def decorate(actual: Callable[..., Any]) -> Operation:
+        return _operation(
+            actual,
+            kind=OperationKind.COMMAND,
+            direction=OperationDirection.PROVIDED,
+            external=external,
+        )
+
+    return decorate(function) if function is not None else decorate
 
 
 def required_command(function: Callable[..., Any]) -> Operation:
@@ -113,14 +145,38 @@ def required_command(function: Callable[..., Any]) -> Operation:
     )
 
 
-def provided_query(function: Callable[..., Any]) -> Operation:
+@overload
+def provided_query(
+    function: Callable[..., Any],
+    *,
+    external: bool = False,
+) -> Operation: ...
+
+
+@overload
+def provided_query(
+    function: None = None,
+    *,
+    external: bool = False,
+) -> Callable[[Callable[..., Any]], Operation]: ...
+
+
+def provided_query(
+    function: Callable[..., Any] | None = None,
+    *,
+    external: bool = False,
+) -> Operation | Callable[[Callable[..., Any]], Operation]:
     """Объявляет синхронный запрос, предоставляемый автоматным классом."""
 
-    return _operation(
-        function,
-        kind=OperationKind.QUERY,
-        direction=OperationDirection.PROVIDED,
-    )
+    def decorate(actual: Callable[..., Any]) -> Operation:
+        return _operation(
+            actual,
+            kind=OperationKind.QUERY,
+            direction=OperationDirection.PROVIDED,
+            external=external,
+        )
+
+    return decorate(function) if function is not None else decorate
 
 
 def required_query(function: Callable[..., Any]) -> Operation:

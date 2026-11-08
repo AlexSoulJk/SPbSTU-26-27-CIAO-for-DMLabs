@@ -15,7 +15,7 @@ except ImportError:
 
 
 def main() -> None:
-    values = [2, 4, 6]
+    values = [2, 4, 6, 10, -1]
     sample = build_sample()
     runtime = Runtime(sample.program)
 

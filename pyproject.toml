@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "spbstu-ciao"
+version = "0.1.0"
+description = "Учебный Python-фреймворк автоматных объектов CIAO"
+readme = "README.md"
+requires-python = ">=3.11"
+authors = [{ name = "SPbSTU CIAO Labs" }]
+dependencies = []
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+]
+
+[tool.setuptools.packages.find]
+include = ["ciao*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = "-q"

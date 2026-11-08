@@ -1,17 +1,5 @@
-"""Необязательные Tkinter-компоненты поверх публичных событий runtime."""
+"""Общие компоненты необязательного слоя визуализации."""
 
-from .tkinter_widgets import (
-    ArrayView,
-    CounterView,
-    StepController,
-    TkTraceAdapter,
-    ValueView,
-)
+from .tkinter_adapter import TkTraceAdapter
 
-__all__ = [
-    "ArrayView",
-    "CounterView",
-    "StepController",
-    "TkTraceAdapter",
-    "ValueView",
-]
+__all__ = ["TkTraceAdapter"]

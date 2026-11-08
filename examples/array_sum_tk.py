@@ -3,28 +3,15 @@
 from __future__ import annotations
 
 import tkinter as tk
-from tkinter import ttk
 
 from ciao import Runtime
-from ciao.visualization import (
-    ArrayView,
-    CounterView,
-    StepController,
-    TkTraceAdapter,
-    ValueView,
-)
+from ciao.visualization import TkTraceAdapter
+from ciao.visualization.array_sample import ArraySumView
 
 try:
     from .test_mock_sample import SumController, build_sample
 except ImportError:
     from test_mock_sample import SumController, build_sample
-
-
-class StatusView(ttk.Label):
-    """Демонстрирует подключение собственного виджета без изменения ядра."""
-
-    def show_state(self, state_name: str) -> None:
-        self.configure(text=f"Состояние: {state_name}")
 
 
 def main() -> None:
@@ -36,42 +23,51 @@ def main() -> None:
     root.title("CIAO — сумма массива")
     root.columnconfigure(0, weight=1)
 
-    array_view = ArrayView(root)
-    array_view.grid(row=0, column=0, padx=12, pady=8)
-    total_view = ValueView(root, "Сумма", value=0)
-    total_view.grid(row=1, column=0, sticky="w", padx=12)
-    index_view = CounterView(root, "Следующий индекс", value=0)
-    index_view.grid(row=2, column=0, sticky="w", padx=12)
-    tick_view = CounterView(root, "tick", value=0)
-    tick_view.grid(row=3, column=0, sticky="w", padx=12)
-    status_view = StatusView(root)
-    status_view.grid(row=4, column=0, sticky="w", padx=12, pady=(4, 8))
-
-    def render() -> None:
-        view = runtime.snapshot(sample.view)
-        controller = runtime.snapshot(sample.controller)
-        selected = view.index if view.index < len(view.values) else None
-        array_view.set_values(view.values or tuple(values), selected_index=selected)
-        total_view.set_value(view.total)
-        index_view.set_value(view.index)
-        tick_view.set_value(view.tick_count)
-        status_view.show_state(controller.state.name)
-        step_controller.set_enabled(controller.state is not SumController.done)
+    def initialize() -> None:
+        if runtime.snapshot(sample.controller).state is not SumController.idle:
+            return
+        runtime.send(sample.controller, SumController.start, values=values)
+        runtime.run()
 
     def next_tick() -> None:
-        if runtime.snapshot(sample.controller).state is SumController.done:
+        if runtime.snapshot(sample.controller).state is not SumController.running:
             return
         runtime.send(sample.controller, SumController.tick)
         runtime.run()
 
-    step_controller = StepController(root, next_tick)
-    step_controller.grid(row=5, column=0, pady=10)
+    sample_view = ArraySumView(
+        root,
+        on_initialize=initialize,
+        on_step=next_tick,
+    )
+    sample_view.grid(row=0, column=0, sticky="nsew")
+
+    def render() -> None:
+        view = runtime.snapshot(sample.view)
+        controller = runtime.snapshot(sample.controller)
+        shown_values = view.values or tuple(values)
+        initialized = controller.state is not SumController.idle
+        selected = (
+            view.index
+            if initialized and view.index < len(shown_values)
+            else None
+        )
+        sample_view.render(
+            values=shown_values,
+            selected_index=selected,
+            total=view.total,
+            index=view.index,
+            tick_count=view.tick_count,
+            state_name=controller.state.name,
+            show_initialize=not initialized,
+            step_enabled=controller.state is SumController.running,
+        )
 
     # Адаптер обновляет GUI через очередь Tkinter после каждого runtime-события.
     TkTraceAdapter(root, runtime, lambda _event: render())
 
-    runtime.send(sample.controller, SumController.start, values=values)
-    runtime.run()
+    # Первая отрисовка предшествует start, поэтому пользователь видит настоящее
+    # начальное состояние idle и сам инициирует переход кнопкой Init.
     render()
     root.mainloop()
 

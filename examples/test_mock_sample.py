@@ -78,16 +78,14 @@ class SumController(ControllerAutomaton[SumContext]):
     ) -> None:
         ...
 
-    @guard
+    @guard(text="\nindex < len(values)")
     def has_current(self, ctx: SumContext) -> bool:
         """Текущий индекс всё ещё указывает на элемент массива."""
-
         return not self._is_out_of_bounds(ctx)
 
-    @guard
+    @guard(text="\nindex >= len(values)")
     def is_complete(self, ctx: SumContext) -> bool:
         """Текущий индекс уже вышел за границу массива."""
-
         return self._is_out_of_bounds(ctx)
 
     @staticmethod
@@ -107,17 +105,17 @@ class SumController(ControllerAutomaton[SumContext]):
         ctx.total = 0
         ctx.tick_count = 0
 
-    @action
+    @action(text="\ntotal += values[index];\nindex++")
     def add_current(self, ctx: SumContext) -> None:
         # Guard выбранного перехода гарантирует допустимость индекса.
         ctx.total += ctx.values[ctx.index]
         ctx.index += 1
 
-    @action
+    @action(text="\nthick_count++")
     def count_tick(self, ctx: SumContext) -> None:
         ctx.tick_count += 1
 
-    @action(emit=draw)
+    @action(emit=draw, text="\nпубликует снимок для представления")
     def publish_draw(self, ctx: SumContext, emit: Emit) -> None:
         # Emit выдан именно этому Action и уже привязан к draw;
         # runtime перенесёт команду в FIFO лишь после всего перехода.
@@ -128,7 +126,7 @@ class SumController(ControllerAutomaton[SumContext]):
             tick_count=ctx.tick_count,
         )
 
-    @action
+    @action(text="clear all context values")
     def clear(self, ctx: SumContext) -> None:
         ctx.values.clear()
         ctx.index = 0

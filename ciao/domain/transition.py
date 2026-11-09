@@ -13,9 +13,17 @@ class Behavior:
 
     role = "behavior"
 
-    def __init__(self, function: Callable[..., Any]) -> None:
+    def __init__(
+        self,
+        function: Callable[..., Any],
+        *,
+        text: str | None = None,
+    ) -> None:
+        if text is not None and not isinstance(text, str):
+            raise TypeError("Behavior.text должен быть строкой или None")
         self.function = function
         self.name = function.__name__
+        self.text = text
         self.owner: type[Any] | None = None
         self.__doc__ = function.__doc__
 
@@ -49,8 +57,9 @@ class Action(Behavior):
         *,
         emit: Operation | None = None,
         emits: tuple[Operation, ...] | None = None,
+        text: str | None = None,
     ) -> None:
-        super().__init__(function)
+        super().__init__(function, text=text)
         self._emit = emit
         self._emits = emits
 
@@ -108,14 +117,51 @@ class Transition:
         return f"{owner_name}.{self.name}"
 
 
-def guard(function: Callable[..., Any]) -> Guard:
-    """Помечает метод как условие перехода."""
-
-    return Guard(function)
-
-
 _MISSING = object()
+_GuardDecorator = Callable[[Callable[..., Any]], Guard]
 _ActionDecorator = Callable[[Callable[..., Any]], Action]
+
+
+def _validated_text(value: object, decorator_name: str) -> str:
+    if not isinstance(value, str):
+        raise TypeError(f"{decorator_name}: text должен быть строкой")
+    return value
+
+
+@overload
+def guard(function: Callable[..., Any], /) -> Guard: ...
+
+
+@overload
+def guard(*, text: str) -> _GuardDecorator: ...
+
+
+def guard(
+    function: Callable[..., Any] | object = _MISSING,
+    /,
+    *,
+    text: str | object = _MISSING,
+) -> Guard | _GuardDecorator:
+    """Объявляет условие и необязательный текст для диаграммы."""
+
+    has_function = function is not _MISSING
+    has_text = text is not _MISSING
+
+    if has_function:
+        if has_text:
+            raise TypeError("Для text используйте параметризованный @guard")
+        if not callable(function):
+            raise TypeError("@guard может декорировать только callable")
+        return Guard(function)
+
+    if not has_text:
+        raise TypeError("Форма @guard() не поддерживается; используйте @guard")
+    validated_text = _validated_text(text, "@guard")
+
+    def decorate(actual: Callable[..., Any]) -> Guard:
+        return Guard(actual, text=validated_text)
+
+    return decorate
 
 
 @overload
@@ -123,11 +169,19 @@ def action(function: Callable[..., Any], /) -> Action: ...
 
 
 @overload
-def action(*, emit: Operation) -> _ActionDecorator: ...
+def action(*, text: str) -> _ActionDecorator: ...
 
 
 @overload
-def action(*, emits: tuple[Operation, ...]) -> _ActionDecorator: ...
+def action(*, emit: Operation, text: str = ...) -> _ActionDecorator: ...
+
+
+@overload
+def action(
+    *,
+    emits: tuple[Operation, ...],
+    text: str = ...,
+) -> _ActionDecorator: ...
 
 
 def action(
@@ -136,39 +190,56 @@ def action(
     *,
     emit: Operation | object = _MISSING,
     emits: tuple[Operation, ...] | object = _MISSING,
+    text: str | object = _MISSING,
 ) -> Action | _ActionDecorator:
     """Объявляет действие и его потенциальные required-команды.
 
-    Поддерживаются ровно три формы:
+    Поддерживаются bare-форма и параметризованные формы:
 
     - ``@action`` — без capability-параметра;
+    - ``@action(text="...")`` — с пояснением для диаграммы;
     - ``@action(emit=command)`` — ожидает в методе параметр ``Emit``;
     - ``@action(emits=(command, ...))`` — ожидает параметр ``Emits``.
 
+    ``text`` также можно передать вместе с ``emit`` или ``emits``.
     Точное соответствие аннотации и метаданных проверяет компилятор.
     """
 
     has_function = function is not _MISSING
     has_emit = emit is not _MISSING
     has_emits = emits is not _MISSING
+    has_text = text is not _MISSING
 
     if has_function:
-        if has_emit or has_emits:
-            raise TypeError("Для emit/emits используйте параметризованный @action")
+        if has_emit or has_emits or has_text:
+            raise TypeError(
+                "Для emit/emits/text используйте параметризованный @action"
+            )
         if not callable(function):
             raise TypeError("@action может декорировать только callable")
         return Action(function)
 
-    if not has_emit and not has_emits:
+    if not has_emit and not has_emits and not has_text:
         raise TypeError("Форма @action() не поддерживается; используйте @action")
     if has_emit and has_emits:
         raise TypeError("Аргументы emit и emits взаимоисключаются")
+    validated_text = None if not has_text else _validated_text(text, "@action")
+    if not has_emit and not has_emits:
+
+        def decorate_with_text(actual: Callable[..., Any]) -> Action:
+            return Action(actual, text=validated_text)
+
+        return decorate_with_text
     if has_emit:
         if emit is None:
             raise TypeError("emit должен ссылаться на required-команду")
 
         def decorate(actual: Callable[..., Any]) -> Action:
-            return Action(actual, emit=emit)  # type: ignore[arg-type]
+            return Action(  # type: ignore[arg-type]
+                actual,
+                emit=emit,
+                text=validated_text,
+            )
 
         return decorate
 
@@ -178,7 +249,7 @@ def action(
         raise TypeError("Пустой emits=() не поддерживается")
 
     def decorate(actual: Callable[..., Any]) -> Action:
-        return Action(actual, emits=emits)
+        return Action(actual, emits=emits, text=validated_text)
 
     return decorate
 

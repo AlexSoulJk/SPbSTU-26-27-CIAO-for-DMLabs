@@ -28,6 +28,7 @@ class OperationView:
     id: str
     operation: Operation
     signature: OperationSignature
+    signature_label: str
     label: str
 
 
@@ -96,8 +97,10 @@ class EdgeCell:
     points: tuple[Point, ...]
     kind: str
     metadata: tuple[tuple[str, str], ...] = ()
-    label_x: float | None = None
-    label_y: float | None = None
+    label_position: float | None = None
+    label_offset: Point | None = None
+    label_width: int | None = None
+    label_height: int | None = None
 
 
 @dataclass(frozen=True)

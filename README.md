@@ -41,7 +41,7 @@ py -m venv .venv
 
 ## Реализовано
 
-- декларативные `State`, включая `final=True`, операции, `Guard`, `Action` и `Transition`;
+- декларативные `State`, включая `final=True`, операции, `Guard`, `Action` и `Transition`; `@guard`/`@action` поддерживают необязательный `text` для понятных подписей диаграммы;
 - явные исходящие required-команды `Action` через `@action(emit=...)` / `@action(emits=(...))` и временные `Emit` / `Emits`;
 - типизированные контексты и роли `Automaton`, `ControllerAutomaton`, `ViewAutomaton`;
 - компиляция и валидация `Program`/`Connection`;

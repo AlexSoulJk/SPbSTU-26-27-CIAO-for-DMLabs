@@ -75,7 +75,10 @@ CONTEXT_STYLES = {
         "fontFamily=monospace;arcSize=0;"
     ),
 }
-ENDPOINT_LABEL = "text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;"
+ENDPOINT_LABEL = (
+    "text;html=1;whiteSpace=wrap;strokeColor=none;fillColor=none;"
+    "align=left;verticalAlign=middle;"
+)
 
 
 def endpoint_style(*, provided: bool, side: str, stroke: str) -> str:
@@ -101,7 +104,10 @@ def transition_style(role: AutomatonRole) -> str:
 
     return (
         "edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;"
-        "jettySize=auto;html=1;endArrow=block;endFill=1;strokeWidth=2;"
+        "jettySize=auto;html=1;whiteSpace=wrap;align=left;"
+        "verticalAlign=middle;fontSize=11;resizable=1;"
+        "labelBackgroundColor=#FFFFFF;"
+        "endArrow=block;endFill=1;strokeWidth=2;"
         f"strokeColor={ROLE_STROKES[role]};"
     )
 

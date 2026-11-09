@@ -26,6 +26,8 @@ def format_type(annotation: Any) -> str:
 
     if annotation is _empty:
         return "Any"
+    if annotation is Ellipsis:
+        return "..."
     if annotation in (None, NoneType):
         return "None"
     if isinstance(annotation, str):
@@ -69,27 +71,49 @@ def _parameter_label(parameter: OperationParameter) -> str:
     return f"{parameter.name}: {format_type(parameter.annotation)}{suffix}"
 
 
-def _operation_label(operation: Any, signature: OperationSignature) -> str:
-    parameters = ", ".join(_parameter_label(item) for item in signature.parameters)
-    label = (
-        f"{operation.direction.value} {operation.kind.value} "
-        f"{operation.name}({parameters})"
+def _visible_parameter_label(parameter: OperationParameter) -> str:
+    """Формирует компактный параметр без аннотации типа для рисунка."""
+
+    suffix = "" if not parameter.has_default else f"={parameter.default!r}"
+    return f"{parameter.name}{suffix}"
+
+
+def _operation_signature_label(
+    operation: Any,
+    signature: OperationSignature,
+) -> str:
+    """Формирует компактную видимую сигнатуру без типов, self и ctx."""
+
+    parameters = ", ".join(
+        _visible_parameter_label(item) for item in signature.parameters
     )
+    return f"{operation.name}({parameters})"
+
+
+def _typed_operation_signature_label(
+    operation: Any,
+    signature: OperationSignature,
+) -> str:
+    """Сохраняет полную типизированную сигнатуру в семантических метаданных."""
+
+    parameters = ", ".join(_parameter_label(item) for item in signature.parameters)
+    label = f"{operation.name}({parameters})"
     if operation.kind is OperationKind.QUERY:
         label += f" -> {format_type(signature.return_type)}"
     return label
 
 
-def _connection_label(operation: Any, signature: OperationSignature) -> str:
-    """Даёт короткую подпись команды и типизированную подпись запроса."""
-
-    if operation.kind is OperationKind.COMMAND:
-        return operation.name
-    parameters = ", ".join(_parameter_label(item) for item in signature.parameters)
+def _operation_label(operation: Any, signature: OperationSignature) -> str:
     return (
-        f"{operation.name}({parameters}) -> "
-        f"{format_type(signature.return_type)}"
+        f"{operation.direction.value} {operation.kind.value} "
+        f"{_typed_operation_signature_label(operation, signature)}"
     )
+
+
+def _connection_label(operation: Any, _: OperationSignature) -> str:
+    """Оставляет на assembly-связи только компактное имя операции."""
+
+    return operation.name
 
 
 def build_diagram(compiled: CompiledProgram) -> DiagramDescription:
@@ -115,6 +139,10 @@ def build_diagram(compiled: CompiledProgram) -> DiagramDescription:
                     id=endpoint_id,
                     operation=operation,
                     signature=signature,
+                    signature_label=_operation_signature_label(
+                        operation,
+                        signature,
+                    ),
                     label=_operation_label(operation, signature),
                 )
             )
@@ -151,8 +179,8 @@ def build_diagram(compiled: CompiledProgram) -> DiagramDescription:
                 provided_endpoint_id=endpoint_ids[
                     (id(provided.object), provided.operation)
                 ],
-                # Владельцы и направления уже видны по концам связи; короткая
-                # подпись не перекрывает узкий межблочный канал.
+                # Направления видны по концам связи, поэтому в подписи остаётся
+                # только пользовательская сигнатура без provided/required.
                 label=connection_label,
             )
         )

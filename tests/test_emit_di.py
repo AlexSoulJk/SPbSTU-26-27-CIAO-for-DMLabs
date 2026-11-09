@@ -21,6 +21,7 @@ from ciao import (
     State,
     action,
     compile_program,
+    guard,
     provided_command,
     required_command,
     required_query,
@@ -407,9 +408,32 @@ class EmitMetadataAndValidationTests(unittest.TestCase):
                 emits=(SingleSender.output,),
             )
         with self.assertRaises(TypeError):
+            action(text=1)  # type: ignore[arg-type]
+        with self.assertRaises(TypeError):
+            guard()
+        with self.assertRaises(TypeError):
+            guard(text=1)  # type: ignore[arg-type]
+        with self.assertRaises(TypeError):
             Emit()
         with self.assertRaises(TypeError):
             Emits()
+
+    def test_behavior_text_is_optional_declarative_metadata(self) -> None:
+        @guard(text="значение положительное")
+        def positive(ctx: SenderContext) -> bool:
+            return ctx.action_calls >= 0
+
+        @action(text="обновляет значение")
+        def update(ctx: SenderContext) -> None:
+            ctx.action_calls += 1
+
+        @action
+        def unchanged(ctx: SenderContext) -> None:
+            ctx.action_calls += 1
+
+        self.assertEqual("значение положительное", positive.text)
+        self.assertEqual("обновляет значение", update.text)
+        self.assertIsNone(unchanged.text)
 
     def test_wrong_or_missing_di_annotation_is_rejected(self) -> None:
         class WrongType(Automaton[SenderContext]):

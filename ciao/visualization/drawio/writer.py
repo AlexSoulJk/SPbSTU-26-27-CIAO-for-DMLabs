@@ -45,13 +45,24 @@ def _write_edge(root: ET.Element, edge: EdgeCell) -> None:
     attributes.update(dict(edge.metadata))
     cell = ET.SubElement(root, "mxCell", attributes)
     geometry_attributes = {"relative": "1", "as": "geometry"}
-    if edge.label_x is not None:
-        geometry_attributes["x"] = str(edge.label_x)
-    if edge.label_y is not None:
-        geometry_attributes["y"] = str(edge.label_y)
+    if edge.label_position is not None:
+        geometry_attributes["x"] = str(edge.label_position)
+        geometry_attributes["y"] = "0"
+    if edge.label_width is not None:
+        geometry_attributes["width"] = str(edge.label_width)
+    if edge.label_height is not None:
+        geometry_attributes["height"] = str(edge.label_height)
     geometry = ET.SubElement(cell, "mxGeometry", geometry_attributes)
-    if edge.label_x is not None or edge.label_y is not None:
-        ET.SubElement(geometry, "mxPoint", {"as": "offset"})
+    if edge.label_offset is not None:
+        ET.SubElement(
+            geometry,
+            "mxPoint",
+            {
+                "x": str(edge.label_offset.x),
+                "y": str(edge.label_offset.y),
+                "as": "offset",
+            },
+        )
     if edge.points:
         points = ET.SubElement(geometry, "Array", {"as": "points"})
         for point in edge.points:

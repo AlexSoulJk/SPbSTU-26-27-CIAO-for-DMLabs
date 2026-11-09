@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
-from collections import defaultdict
-from math import ceil
+import re
+from collections import Counter, defaultdict
+from html import escape, unescape
+from math import ceil, hypot
 
-from ciao.domain import OperationDirection, OperationKind
+from ciao.domain import OperationDirection
 
 from . import styles
 from .builder import format_type
@@ -21,12 +23,17 @@ from .diagram_model import (
 
 
 BLOCK_WIDTH = 780
-BLOCK_GAP_X = 220
+BLOCK_GAP_X = 360
 BLOCK_GAP_Y = 160
 PAGE_MARGIN_X = 180
 PAGE_MARGIN_Y = 100
 BLOCKS_PER_ROW = 2
 ENDPOINT_SIZE = 32
+CONNECTION_LANE_GAP = 80
+CONNECTION_EXIT_STEP = 0.16
+LABEL_GAP = 10
+LABEL_CHAR_WIDTH = 8
+LABEL_LINE_HEIGHT = 18
 
 
 def _center(rectangle: Rect) -> Point:
@@ -36,19 +43,203 @@ def _center(rectangle: Rect) -> Point:
     )
 
 
-def _transition_details(transition: object) -> str:
+def _action_labels(
+    action: object,
+    operation_labels: dict[object, str],
+) -> tuple[str, ...]:
+    outgoing_commands = getattr(action, "outgoing_commands")
+    # outgoing_commands уже сохраняет различие emit/emits и порядок кортежа.
+    if outgoing_commands:
+        return tuple(
+            escape(operation_labels[command]) for command in outgoing_commands
+        )
+
+    action_name = escape(getattr(action, "name"))
+    action_text = getattr(action, "text")
+    return (
+        (f"<b>{action_name}:</b> {_user_text_html(action_text)}",)
+        if action_text is not None
+        else (action_name,)
+    )
+
+
+def _user_text_html(text: str) -> str:
+    """Экранирует текст, сохраняя только переносы, заданные пользователем."""
+
+    normalized = text.replace("\r\n", "\n").replace("\r", "\n")
+    return escape(normalized).replace("\n", "<br>")
+
+
+def _plain_label_lines(label: str) -> tuple[str, ...]:
+    with_breaks = re.sub(r"<br\s*/?>", "\n", label, flags=re.IGNORECASE)
+    plain = unescape(re.sub(r"<[^>]+>", "", with_breaks))
+    return tuple(plain.split("\n")) or ("",)
+
+
+def _label_dimensions(label: str) -> tuple[int, int]:
+    """Подбирает редактируемое поле под явные строки без автопереноса."""
+
+    lines = _plain_label_lines(label)
+    width = max(40, max(len(line) for line in lines) * LABEL_CHAR_WIDTH + 18)
+    height = max(26, len(lines) * LABEL_LINE_HEIGHT + 8)
+    return width, height
+
+
+def _rectangles_intersect(first: Rect, second: Rect, *, margin: int = 5) -> bool:
+    return not (
+        first.x + first.width + margin <= second.x
+        or second.x + second.width + margin <= first.x
+        or first.y + first.height + margin <= second.y
+        or second.y + second.height + margin <= first.y
+    )
+
+
+def _polyline_midpoint(points: tuple[Point, ...]) -> Point:
+    lengths = [
+        hypot(right.x - left.x, right.y - left.y)
+        for left, right in zip(points, points[1:])
+    ]
+    total = sum(lengths)
+    if total == 0:
+        return points[0]
+    remaining = total / 2
+    for left, right, length in zip(points, points[1:], lengths):
+        if remaining <= length:
+            ratio = remaining / length if length else 0
+            return Point(
+                round(left.x + (right.x - left.x) * ratio),
+                round(left.y + (right.y - left.y) * ratio),
+            )
+        remaining -= length
+    return points[-1]
+
+
+def _label_offset(
+    side: str,
+    width: int,
+    height: int,
+    *,
+    extra_gap: int = 0,
+) -> Point:
+    gap = LABEL_GAP + extra_gap
+    if side == "above":
+        return Point(0, -(height // 2 + gap))
+    if side == "below":
+        return Point(0, height // 2 + gap)
+    if side == "left":
+        return Point(-(width // 2 + gap), 0)
+    return Point(width // 2 + gap, 0)
+
+
+def _label_rectangle(
+    anchor: Point,
+    offset: Point,
+    width: int,
+    height: int,
+) -> Rect:
+    return Rect(
+        anchor.x + offset.x - width // 2,
+        anchor.y + offset.y - height // 2,
+        width,
+        height,
+    )
+
+
+def _place_edge_label(
+    *,
+    source: Rect,
+    target: Rect,
+    points: tuple[Point, ...],
+    label: str,
+    preferred_sides: tuple[str, ...],
+    obstacles: list[Rect],
+    bounds: Rect,
+) -> tuple[Point, int, int]:
+    """Находит ближайшую свободную сторону и резервирует место подписи."""
+
+    width, height = _label_dimensions(label)
+    path = (_center(source), *points, _center(target))
+    anchor = _polyline_midpoint(path)
+    fallback: tuple[tuple[int, int, int, int], Point, Rect] | None = None
+
+    for extra_gap in (0, 8, 16, 28, 44):
+        for side_index, side in enumerate(preferred_sides):
+            offset = _label_offset(
+                side,
+                width,
+                height,
+                extra_gap=extra_gap,
+            )
+            rectangle = _label_rectangle(anchor, offset, width, height)
+            intersections = sum(
+                _rectangles_intersect(rectangle, obstacle)
+                for obstacle in obstacles
+            )
+            outside = (
+                max(0, bounds.x + 6 - rectangle.x)
+                + max(0, bounds.y + 6 - rectangle.y)
+                + max(
+                    0,
+                    rectangle.x
+                    + rectangle.width
+                    - (bounds.x + bounds.width - 6),
+                )
+                + max(
+                    0,
+                    rectangle.y
+                    + rectangle.height
+                    - (bounds.y + bounds.height - 6),
+                )
+            )
+            score = (intersections, outside, extra_gap, side_index)
+            if fallback is None or score < fallback[0]:
+                fallback = (score, offset, rectangle)
+            inside = (
+                rectangle.x >= bounds.x + 6
+                and rectangle.y >= bounds.y + 6
+                and rectangle.x + rectangle.width <= bounds.x + bounds.width - 6
+                and rectangle.y + rectangle.height <= bounds.y + bounds.height - 6
+            )
+            if inside and intersections == 0:
+                obstacles.append(rectangle)
+                return offset, width, height
+
+    assert fallback is not None
+    _, offset, rectangle = fallback
+    obstacles.append(rectangle)
+    return offset, width, height
+
+
+def _transition_details(
+    transition: object,
+    operation_labels: dict[object, str],
+) -> str:
     guard = getattr(transition, "guard")
     actions = getattr(transition, "actions")
-    parts = [getattr(transition, "name")]
+    parts: list[str] = []
     if guard is not None:
-        parts.append(f"[{guard.name}]")
+        guard_label = escape(guard.name)
+        if guard.text is not None:
+            guard_label += f": {_user_text_html(guard.text)}"
+        parts.append(f"[{guard_label}]")
     if actions:
-        parts.append("/ " + ", ".join(action.name for action in actions))
-    return "\n".join(parts)
+        action_labels = [
+            label
+            for action in actions
+            for label in _action_labels(action, operation_labels)
+        ]
+        parts.append("/ " + "<br>".join(action_labels))
+    return "<br>".join(parts)
 
 
-def _transition_label(transition: object) -> str:
-    return f"{getattr(transition, 'event').name}\n{_transition_details(transition)}"
+def _transition_label(
+    transition: object,
+    operation_labels: dict[object, str],
+) -> str:
+    event = getattr(transition, "event")
+    details = _transition_details(transition, operation_labels)
+    event_label = escape(operation_labels[event])
+    return f"{event_label}<br>{details}" if details else event_label
 
 
 def _route_transition(
@@ -97,10 +288,7 @@ def _block_height(block: AutomatonView) -> int:
 
 
 def _visible_operation_label(operation_view: object) -> str:
-    operation = getattr(operation_view, "operation")
-    if operation.kind is OperationKind.COMMAND:
-        return operation.name
-    return getattr(operation_view, "label")
+    return getattr(operation_view, "signature_label")
 
 
 def _operation_label_geometry(
@@ -137,6 +325,10 @@ def _layout_block(
     nodes: list[NodeCell] = []
     edges: list[EdgeCell] = []
     geometries: dict[str, Rect] = {block.id: block_geometry}
+    operation_labels = {
+        operation_view.operation: operation_view.signature_label
+        for operation_view in block.operations
+    }
     nodes.append(
         NodeCell(
             id=block.id,
@@ -331,6 +523,7 @@ def _layout_block(
         transition = transition_view.transition
         grouped[(transition.source, transition.event)].append(transition_view)
 
+    label_obstacles = [context_geometry, *state_geometries.values()]
     decision_index = 0
     reverse_lane = 0
     for (source, event), transition_views in grouped.items():
@@ -348,22 +541,50 @@ def _layout_block(
             )
             is_reverse = state_indexes[source] > state_indexes[target]
             is_loop = source is target
+            crosses_rows = abs(
+                _center(source_geometry).y - _center(state_geometries[target]).y
+            ) >= max(source_geometry.height, state_geometries[target].height)
             if state_indexes[source] >= state_indexes[target]:
                 reverse_lane += 1
+            if is_loop:
+                preferred_sides = ("right", "below", "above", "left")
+            elif crosses_rows:
+                preferred_sides = (
+                    ("left", "right", "above", "below")
+                    if is_reverse
+                    else ("right", "left", "above", "below")
+                )
+            elif is_reverse:
+                preferred_sides = ("above", "below", "left", "right")
+            else:
+                preferred_sides = ("above", "below", "right", "left")
+            label = _transition_label(
+                transition_view.transition,
+                operation_labels,
+            )
+            label_offset, label_width, label_height = _place_edge_label(
+                source=source_geometry,
+                target=state_geometries[target],
+                points=points,
+                label=label,
+                preferred_sides=preferred_sides,
+                obstacles=label_obstacles,
+                bounds=block_geometry,
+            )
             edges.append(
                 EdgeCell(
                     id=transition_view.id,
-                    label=_transition_label(transition_view.transition),
+                    label=label,
                     style=styles.transition_style(block.role),
                     source_id=source_id,
                     target_id=state_ids[target],
                     points=points,
                     kind="transition",
                     metadata=(("ciaoTransition", transition_view.transition.name),),
-                    label_x=(
-                        None if is_loop else (-0.0246 if is_reverse else 0.0667)
-                    ),
-                    label_y=None if is_loop else (-24 if is_reverse else 29),
+                    label_position=0,
+                    label_offset=label_offset,
+                    label_width=label_width,
+                    label_height=label_height,
                 )
             )
             continue
@@ -377,6 +598,7 @@ def _layout_block(
         )
         decision_index += 1
         geometries[decision_id] = decision_geometry
+        label_obstacles.append(decision_geometry)
         nodes.append(
             NodeCell(
                 id=decision_id,
@@ -387,15 +609,29 @@ def _layout_block(
                 metadata=(("ciaoSource", source.name), ("ciaoEvent", event.name)),
             )
         )
+        event_label = escape(operation_labels[event])
+        event_offset, event_width, event_height = _place_edge_label(
+            source=source_geometry,
+            target=decision_geometry,
+            points=(),
+            label=event_label,
+            preferred_sides=("left", "right", "above", "below"),
+            obstacles=label_obstacles,
+            bounds=block_geometry,
+        )
         edges.append(
             EdgeCell(
                 id=f"{decision_id}-incoming",
-                label=event.name,
+                label=event_label,
                 style=styles.transition_style(block.role),
                 source_id=source_id,
                 target_id=decision_id,
                 points=(),
                 kind="decisionIncoming",
+                label_position=0,
+                label_offset=event_offset,
+                label_width=event_width,
+                label_height=event_height,
             )
         )
         decision_center = _center(decision_geometry)
@@ -415,31 +651,50 @@ def _layout_block(
                     Point(lane_x, decision_center.y),
                     Point(lane_x, target_center.y + 11),
                 )
-                label_x, label_y = 0.0686, 120
+                preferred_sides = ("left", "right", "below", "above")
             else:
                 target_lane_x = target_center.x + max(0, branch_index - 1) * 30
                 branch_points = (
                     Point(decision_center.x, lane_y),
                     Point(target_lane_x, lane_y),
                 )
-                label_x = (
-                    -0.3602
-                    if branch_index == 1
-                    else -0.2754 + (branch_index - 2) * 0.08
+                preferred_sides = (
+                    ("above", "below", "right", "left")
+                    if branch_index % 2 == 0
+                    else ("below", "above", "right", "left")
                 )
-                label_y = 26 if branch_index % 2 else -26
+            label = _transition_details(
+                transition_view.transition,
+                operation_labels,
+            )
+            if label:
+                label_offset, label_width, label_height = _place_edge_label(
+                    source=decision_geometry,
+                    target=target_geometry,
+                    points=branch_points,
+                    label=label,
+                    preferred_sides=preferred_sides,
+                    obstacles=label_obstacles,
+                    bounds=block_geometry,
+                )
+            else:
+                label_offset = None
+                label_width = None
+                label_height = None
             edges.append(
                 EdgeCell(
                     id=transition_view.id,
-                    label=_transition_details(transition_view.transition),
+                    label=label,
                     style=styles.transition_style(block.role),
                     source_id=decision_id,
                     target_id=state_ids[target],
                     points=branch_points,
                     kind="transitionBranch",
                     metadata=(("ciaoTransition", transition_view.transition.name),),
-                    label_x=label_x,
-                    label_y=label_y,
+                    label_position=0 if label else None,
+                    label_offset=label_offset,
+                    label_width=label_width,
+                    label_height=label_height,
                 )
             )
 
@@ -455,23 +710,49 @@ def _side_towards(block: Rect, target: Point) -> str:
     return "bottom" if target.y >= block_center.y else "top"
 
 
-def _junction_geometry(required: Rect, provided: Rect, lane: int) -> Rect:
+def _junction_geometry(
+    required: Rect,
+    provided: Rect,
+    lane_offset: float,
+) -> Rect:
     required_center = _center(required)
     provided_center = _center(provided)
     if required == provided:
         center_x = required.x + required.width + 75
-        center_y = required_center.y + lane * 45
+        center_y = required_center.y + round(lane_offset * CONNECTION_LANE_GAP)
     elif abs(provided_center.x - required_center.x) >= abs(
         provided_center.y - required_center.y
     ):
         left, right = sorted((required, provided), key=lambda item: item.x)
         center_x = (left.x + left.width + right.x) // 2 - 5
-        center_y = (required_center.y + provided_center.y) // 2 + lane * 45
+        center_y = (
+            (required_center.y + provided_center.y) // 2
+            + round(lane_offset * CONNECTION_LANE_GAP)
+        )
     else:
         top, bottom = sorted((required, provided), key=lambda item: item.y)
-        center_x = (required_center.x + provided_center.x) // 2 + lane * 45
+        center_x = (
+            (required_center.x + provided_center.x) // 2
+            + round(lane_offset * CONNECTION_LANE_GAP)
+        )
         center_y = (top.y + top.height + bottom.y) // 2
     return Rect(center_x - 5, center_y - 5, 10, 10)
+
+
+def _connection_exit_offset(
+    lane_offset: float,
+    *,
+    required: bool,
+    self_connection: bool,
+) -> float:
+    """Разносит connection по границе блока, не прижимая их к углам."""
+
+    if self_connection:
+        base = 0.43 if required else 0.57
+        value = base + lane_offset * 0.12
+    else:
+        value = 0.5 + lane_offset * CONNECTION_EXIT_STEP
+    return round(min(0.84, max(0.16, value)), 2)
 
 
 def layout_diagram(description: DiagramDescription) -> DiagramPage:
@@ -530,6 +811,18 @@ def layout_diagram(description: DiagramDescription) -> DiagramPage:
         edges.extend(block_edges)
         geometries.update(inner_geometries)
 
+    connection_pairs = [
+        tuple(
+            sorted(
+                (
+                    operation_owners[connection.required_endpoint_id],
+                    operation_owners[connection.provided_endpoint_id],
+                )
+            )
+        )
+        for connection in description.connections
+    ]
+    pair_counts = Counter(connection_pairs)
     pair_lanes: dict[tuple[str, str], int] = defaultdict(int)
     for connection in description.connections:
         required_owner = operation_owners[connection.required_endpoint_id]
@@ -539,11 +832,18 @@ def layout_diagram(description: DiagramDescription) -> DiagramPage:
         pair = tuple(sorted((required_owner, provided_owner)))
         lane = pair_lanes[pair]
         pair_lanes[pair] += 1
+        lane_offset = lane - (pair_counts[pair] - 1) / 2
 
         junction_id = f"{connection.id}-junction"
-        junction_geometry = _junction_geometry(required_block, provided_block, lane)
+        junction_geometry = _junction_geometry(
+            required_block,
+            provided_block,
+            lane_offset,
+        )
         junction_center = _center(junction_geometry)
-        label_width = max(60, min(300, len(connection.label) * 8 + 20))
+        connection_label = escape(connection.label)
+        label_width, label_height = _label_dimensions(connection_label)
+        label_width = max(60, label_width)
         nodes.append(
             NodeCell(
                 id=junction_id,
@@ -557,13 +857,13 @@ def layout_diagram(description: DiagramDescription) -> DiagramPage:
         nodes.append(
             NodeCell(
                 id=f"{connection.id}-label",
-                label=connection.label,
+                label=connection_label,
                 style=styles.CONNECTION_LABEL,
                 geometry=Rect(
                     junction_center.x - label_width // 2,
-                    junction_center.y - 40,
+                    junction_center.y - label_height - 10,
                     label_width,
-                    30,
+                    label_height,
                 ),
                 kind="connectionLabel",
                 metadata=(("ciaoConnection", connection.id),),
@@ -587,9 +887,11 @@ def layout_diagram(description: DiagramDescription) -> DiagramPage:
                         exit_side=_side_towards(
                             block_geometries[owner_id], junction_center
                         ),
-                        exit_offset=(
-                            0.43 if required else 0.57
-                        ) if is_self_connection else 0.5,
+                        exit_offset=_connection_exit_offset(
+                            lane_offset,
+                            required=required,
+                            self_connection=is_self_connection,
+                        ),
                     ),
                     source_id=owner_id,
                     target_id=junction_id,

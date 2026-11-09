@@ -120,13 +120,13 @@ def above_threshold(
 
 Для нескольких операций применяется `queries=(sensor_value, sensor_ready)` и параметр `queries: Queries`; конкретный запрос вызывается как `queries[self.sensor_value]()`. Query выполняется немедленно через настроенный `Connection`, не попадает в FIFO и не кэшируется. Capability нельзя сохранять для последующего использования. Контекст не содержит ссылку на Runtime и не предоставляет методов управления очередью. Полный небольшой пример расположен в [`examples/query_di.py`](../../examples/query_di.py).
 
-Цельный исполняемый пример с двумя автоматами, состояниями, переходами, соединением и headless-запуском находится в [`examples/test_mock_sample.py`](../../examples/test_mock_sample.py). Короткая точка запуска — `examples/array_sum.py`.
+Исполняемый пример разделён по ответственности: автоматные классы находятся в [`examples/array_sum/automatos`](../../examples/array_sum/automatos), сборка объектов и соединений — в [`examples/array_sum/program.py`](../../examples/array_sum/program.py), а headless-запуск — в [`examples/array_sum/array_sum.py`](../../examples/array_sum/array_sum.py). Headless-сценарий печатает не только результат, но и последовательную трассу операций, переходов и отправленных сообщений.
 
 В актуальном примере Controller находится в `running`, пока ожидает пользовательский `tick`. Обычный Guard проверяет только наличие текущего элемента: при успехе элемент прибавляется к сумме и Controller переходит в `publishing`; когда Guard ложен, ветвь `otherwise` переводит его прямо в `done`. В состоянии `publishing` он ожидает команду `draw_completed` от View. View посылает её после применения снимка, поэтому возврат в `running` происходит через FIFO автоматически и не требует второго нажатия кнопки.
 
 `StepResult.transition` и `TraceEvent.transition` содержат имя выбранного class-атрибута перехода. До выбора ветви, для пустого шага и `IGNORED` используется `None`; если исключение возникло внутри Action, имя уже выбранной ветви сохраняется.
 
-Tkinter-пример при запуске сначала показывает настоящее начальное состояние `idle`. Кнопка `Init` отправляет команду `start`; после перехода в `running` она исчезает, а на её месте появляется кнопка «Следующий шаг», отправляющая пользовательскую команду `tick`. Общий адаптер событий находится в `ciao.visualization`, а конкретное представление этого примера импортируется из `ciao.visualization.array_sample`.
+Tkinter-пример при запуске сначала показывает настоящее начальное состояние `idle`. Кнопка `Init` отправляет команду `start`; после перехода в `running` она исчезает, а на её месте появляется кнопка «Следующий шаг», отправляющая пользовательскую команду `tick`. Общий адаптер событий находится в `ciao.visualization`, а конкретное представление этого примера — в `examples.array_sum.ui`.
 
 ## Экспорт в draw.io
 
@@ -134,7 +134,7 @@ Tkinter-пример при запуске сначала показывает �
 
 ```python
 from ciao.visualization.drawio import export_program_drawio
-from examples.test_mock_sample import build_sample
+from examples.array_sum.program import build_sample
 
 sample = build_sample()
 path = export_program_drawio(sample.program, "sum_program.drawio")
@@ -161,8 +161,8 @@ print(path)
 py -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -e ".[dev]"
 .\.venv\Scripts\python.exe -m pytest
-.\.venv\Scripts\python.exe examples\array_sum.py
+.\.venv\Scripts\python.exe -m examples.array_sum.array_sum
 .\.venv\Scripts\python.exe examples\query_di.py
-.\.venv\Scripts\python.exe examples\array_sum_tk.py
+.\.venv\Scripts\python.exe -m examples.array_sum.array_sum_tk
 .\.venv\Scripts\python.exe examples\export_drawio.py
 ```

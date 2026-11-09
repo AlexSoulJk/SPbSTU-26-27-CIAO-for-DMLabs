@@ -48,19 +48,57 @@ def _action_labels(
     operation_labels: dict[object, str],
 ) -> tuple[str, ...]:
     outgoing_commands = getattr(action, "outgoing_commands")
-    # outgoing_commands уже сохраняет различие emit/emits и порядок кортежа.
-    if outgoing_commands:
-        return tuple(
-            escape(operation_labels[command]) for command in outgoing_commands
+    outgoing_queries = getattr(action, "outgoing_queries")
+    labels: list[str] = []
+
+    if not outgoing_commands:
+        action_name = escape(getattr(action, "name"))
+        action_text = getattr(action, "text")
+        labels.append(
+            f"<b>{action_name}:</b> {_user_text_html(action_text)}"
+            if action_text is not None
+            else action_name
         )
 
-    action_name = escape(getattr(action, "name"))
-    action_text = getattr(action, "text")
+    if outgoing_queries:
+        labels.extend(_query_labels(outgoing_queries, operation_labels))
+
+    # При Emit собственная строка Action скрыта: видимыми действиями являются
+    # required-команды, но Query-блок того же обработчика сохраняется.
+    if outgoing_commands:
+        labels.extend(
+            operation_labels[command] for command in outgoing_commands
+        )
+    return tuple(labels)
+
+
+def _query_labels(
+    queries: tuple[object, ...],
+    operation_labels: dict[object, str],
+) -> tuple[str, ...]:
+    """Формирует явный блок потенциальных синхронных запросов."""
+
     return (
-        (f"<b>{action_name}:</b> {_user_text_html(action_text)}",)
-        if action_text is not None
-        else (action_name,)
+        "&lt;&lt;Query&gt;&gt;:",
+        *(operation_labels[query] for query in queries),
     )
+
+
+def _operation_call_label(operation_view: object) -> str:
+    """Связывает текст required-операции с её видимым вызовом."""
+
+    operation = getattr(operation_view, "operation")
+    signature_label = escape(getattr(operation_view, "signature_label"))
+    if operation.text is None:
+        return signature_label
+    return f"<b>{signature_label}:</b> {_user_text_html(operation.text)}"
+
+
+def _operation_text_metadata(operation: object) -> tuple[tuple[str, str], ...]:
+    """Возвращает XML-метаданные только для явно заданного описания."""
+
+    text = getattr(operation, "text")
+    return (("ciaoText", text),) if text is not None else ()
 
 
 def _user_text_html(text: str) -> str:
@@ -224,6 +262,8 @@ def _transition_details(
         if guard.text is not None:
             guard_label += f": {_user_text_html(guard.text)}"
         parts.append(f"[{guard_label}]")
+        if guard.outgoing_queries:
+            parts.extend(_query_labels(guard.outgoing_queries, operation_labels))
     if actions:
         action_labels = [
             label
@@ -238,6 +278,23 @@ def _transition_metadata(transition: object) -> tuple[tuple[str, str], ...]:
     metadata = [("ciaoTransition", getattr(transition, "name"))]
     if getattr(transition, "otherwise"):
         metadata.append(("ciaoOtherwise", "true"))
+    guard = getattr(transition, "guard")
+    actions = getattr(transition, "actions")
+    queries = (
+        (() if guard is None else guard.outgoing_queries)
+        + tuple(
+            query
+            for action in actions
+            for query in action.outgoing_queries
+        )
+    )
+    if queries:
+        metadata.append(
+            (
+                "ciaoQueries",
+                ";".join(query.qualified_name for query in queries),
+            )
+        )
     return tuple(metadata)
 
 
@@ -335,7 +392,7 @@ def _layout_block(
     edges: list[EdgeCell] = []
     geometries: dict[str, Rect] = {block.id: block_geometry}
     operation_labels = {
-        operation_view.operation: operation_view.signature_label
+        operation_view.operation: _operation_call_label(operation_view)
         for operation_view in block.operations
     }
     nodes.append(
@@ -495,6 +552,7 @@ def _layout_block(
                     ("ciaoDirection", operation.direction.value),
                     ("ciaoKind", operation.kind.value),
                     ("ciaoExternal", str(operation.external).lower()),
+                    *_operation_text_metadata(operation),
                 ),
             )
         )
@@ -509,6 +567,7 @@ def _layout_block(
                 metadata=(
                     ("ciaoOperation", operation.name),
                     ("ciaoDirection", operation.direction.value),
+                    *_operation_text_metadata(operation),
                 ),
             )
         )
@@ -916,6 +975,7 @@ def layout_diagram(description: DiagramDescription) -> DiagramPage:
                         ("ciaoDirection", operation.direction.value),
                         ("ciaoKind", operation.kind.value),
                         ("ciaoSignature", operation_view.label),
+                        *_operation_text_metadata(operation),
                     ),
                 )
             )

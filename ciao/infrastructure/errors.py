@@ -41,5 +41,9 @@ class QueryRoutingError(RuntimeExecutionError):
     """Синхронный запрос нельзя однозначно маршрутизировать."""
 
 
+class QueryExecutionError(RuntimeExecutionError):
+    """Пользовательская реализация provided-query завершилась исключением."""
+
+
 class StepLimitExceeded(RuntimeExecutionError):
     """Исполнение достигло настроенного предела шагов."""

@@ -21,6 +21,7 @@ from ciao.domain.model import (
     ViewAutomaton,
 )
 from ciao.domain.operations import Operation, OperationDirection, OperationKind
+from ciao.domain.query import Queries, Query
 from ciao.domain.transition import Action, Behavior, Guard, Transition
 
 from .errors import MissingOtherwiseWarning, ModelValidationError
@@ -55,6 +56,15 @@ class ActionInjectionPlan:
 
 
 @dataclass(frozen=True)
+class QueryInjectionPlan:
+    """Проверенный план внедрения Query capability в один обработчик."""
+
+    parameter_name: str
+    capability_type: type[Query] | type[Queries]
+    queries: tuple[Operation, ...]
+
+
+@dataclass(frozen=True)
 class AutomatonDefinition:
     """Проверенное описание одного автоматного класса."""
 
@@ -68,6 +78,8 @@ class AutomatonDefinition:
     guards: tuple[Guard, ...]
     actions: tuple[Action, ...]
     action_injections: Mapping[Action, ActionInjectionPlan | None]
+    guard_query_injections: Mapping[Guard, QueryInjectionPlan | None]
+    action_query_injections: Mapping[Action, QueryInjectionPlan | None]
     transitions: tuple[Transition, ...]
 
 
@@ -224,14 +236,24 @@ def _validate_handler_for_event(
             )
 
 
-def _is_capability_annotation(annotation: Any) -> bool:
-    """Находит также запрещённые Optional/Annotated/подтипы capability."""
+def _is_emission_annotation(annotation: Any) -> bool:
+    """Находит также запрещённые Optional/Annotated/подтипы Emit capability."""
 
     if annotation in (Emit, Emits):
         return True
     if isinstance(annotation, type) and issubclass(annotation, (Emit, Emits)):
         return True
-    return any(_is_capability_annotation(item) for item in get_args(annotation))
+    return any(_is_emission_annotation(item) for item in get_args(annotation))
+
+
+def _is_query_annotation(annotation: Any) -> bool:
+    """Находит также запрещённые Optional/Annotated/подтипы Query capability."""
+
+    if annotation in (Query, Queries):
+        return True
+    if isinstance(annotation, type) and issubclass(annotation, (Query, Queries)):
+        return True
+    return any(_is_query_annotation(item) for item in get_args(annotation))
 
 
 def _compile_action_injection(
@@ -292,7 +314,7 @@ def _compile_action_injection(
     related = [
         parameter
         for parameter in parameters
-        if _is_capability_annotation(hints.get(parameter.name, _empty))
+        if _is_emission_annotation(hints.get(parameter.name, _empty))
     ]
 
     if not commands:
@@ -342,7 +364,115 @@ def _compile_action_injection(
     )
 
 
-def _validate_guard_has_no_capability(
+def _compile_query_injection(
+    behavior: Behavior,
+    automaton_type: type[Automaton[Any]],
+    operations: tuple[Operation, ...],
+) -> QueryInjectionPlan | None:
+    """Проверяет query/queries и находит соответствующий DI-параметр."""
+
+    if behavior.query is not None and behavior.queries is not None:
+        raise ModelValidationError(
+            f"{behavior.qualified_name}: query и queries взаимоисключаются"
+        )
+    if behavior.queries is not None:
+        if not isinstance(behavior.queries, tuple):
+            raise ModelValidationError(
+                f"{behavior.qualified_name}: queries должен быть кортежем"
+            )
+        if not behavior.queries:
+            raise ModelValidationError(
+                f"{behavior.qualified_name}: queries должен быть непустым"
+            )
+
+    queries = behavior.outgoing_queries
+    seen: set[Operation] = set()
+    for query_item in queries:
+        if not isinstance(query_item, Operation):
+            raise ModelValidationError(
+                f"{behavior.qualified_name}: query/queries должен ссылаться "
+                "на @required_query"
+            )
+        if query_item in seen:
+            raise ModelValidationError(
+                f"{behavior.qualified_name}: запрос {query_item.qualified_name} "
+                "повторён в queries"
+            )
+        seen.add(query_item)
+        if query_item not in operations:
+            raise ModelValidationError(
+                f"{behavior.qualified_name}: запрос {query_item.qualified_name} "
+                f"не принадлежит {automaton_type.__name__}"
+            )
+        if not (
+            query_item.kind is OperationKind.QUERY
+            and query_item.direction is OperationDirection.REQUIRED
+        ):
+            raise ModelValidationError(
+                f"{behavior.qualified_name}: {query_item.qualified_name} "
+                "не является required-query"
+            )
+
+    hints = _type_hints(
+        behavior.function,
+        automaton_type,
+        include_extras=True,
+    )
+    parameters = _function_parameters(behavior.function)[1:]
+    related = [
+        parameter
+        for parameter in parameters
+        if _is_query_annotation(hints.get(parameter.name, _empty))
+    ]
+
+    if not queries:
+        if related:
+            raise ModelValidationError(
+                f"{behavior.qualified_name}: Query capability-параметр разрешён "
+                "только при query=... или queries=..."
+            )
+        return None
+
+    expected_type: type[Query] | type[Queries]
+    expected_type = Query if behavior.query is not None else Queries
+    exact = [
+        parameter
+        for parameter in parameters
+        if hints.get(parameter.name, _empty) is expected_type
+    ]
+    if len(exact) != 1:
+        raise ModelValidationError(
+            f"{behavior.qualified_name}: ожидается ровно один параметр "
+            f"с точной аннотацией {expected_type.__name__}"
+        )
+    if any(parameter not in exact for parameter in related):
+        raise ModelValidationError(
+            f"{behavior.qualified_name}: допустима только точная "
+            f"аннотация {expected_type.__name__}"
+        )
+
+    parameter = exact[0]
+    if parameter.kind not in (
+        Parameter.POSITIONAL_OR_KEYWORD,
+        Parameter.KEYWORD_ONLY,
+    ):
+        raise ModelValidationError(
+            f"{behavior.qualified_name}: DI-параметр {parameter.name!r} "
+            "должен быть positional-or-keyword или keyword-only"
+        )
+    if parameter.default is not _empty:
+        raise ModelValidationError(
+            f"{behavior.qualified_name}: DI-параметр {parameter.name!r} "
+            "не должен иметь значение по умолчанию"
+        )
+    return QueryInjectionPlan(
+        parameter_name=parameter.name,
+        capability_type=expected_type,
+        queries=queries,
+    )
+
+
+def _validate_guard_has_no_emission(
     guard_item: Guard,
     automaton_type: type[Automaton[Any]],
 ) -> None:
@@ -353,7 +483,7 @@ def _validate_guard_has_no_capability(
     )
     parameters = _function_parameters(guard_item.function)[1:]
     if any(
-        _is_capability_annotation(hints.get(parameter.name, _empty))
+        _is_emission_annotation(hints.get(parameter.name, _empty))
         for parameter in parameters
     ):
         raise ModelValidationError(
@@ -460,14 +590,30 @@ def _compile_automaton(automaton_type: type[Automaton[Any]]) -> AutomatonDefinit
             raise ModelValidationError(
                 f"{operation.qualified_name}: external разрешён только для provided-операций"
             )
+        if operation.text is not None and operation.direction is not OperationDirection.REQUIRED:
+            raise ModelValidationError(
+                f"{operation.qualified_name}: text разрешён только для required-операций"
+            )
 
+    guard_query_injections: dict[Guard, QueryInjectionPlan | None] = {}
     for item in guards:
         _validate_behavior(item, automaton_type, context_type, bool)
-        _validate_guard_has_no_capability(item, automaton_type)
+        _validate_guard_has_no_emission(item, automaton_type)
+        guard_query_injections[item] = _compile_query_injection(
+            item,
+            automaton_type,
+            operations,
+        )
     action_injections: dict[Action, ActionInjectionPlan | None] = {}
+    action_query_injections: dict[Action, QueryInjectionPlan | None] = {}
     for item in actions:
         _validate_behavior(item, automaton_type, context_type, NoneType)
         action_injections[item] = _compile_action_injection(
+            item,
+            automaton_type,
+            operations,
+        )
+        action_query_injections[item] = _compile_query_injection(
             item,
             automaton_type,
             operations,
@@ -500,6 +646,17 @@ def _compile_automaton(automaton_type: type[Automaton[Any]]) -> AutomatonDefinit
                 item.guard,
                 item.event,
                 operation_signatures[item.event],
+                excluded_parameters=(
+                    frozenset(
+                        (
+                            guard_query_injections[
+                                item.guard
+                            ].parameter_name,
+                        )
+                    )
+                    if guard_query_injections[item.guard] is not None
+                    else frozenset()
+                ),
             )
         for action_item in item.actions:
             if action_item not in actions:
@@ -510,12 +667,13 @@ def _compile_automaton(automaton_type: type[Automaton[Any]]) -> AutomatonDefinit
                 action_item,
                 item.event,
                 operation_signatures[item.event],
-                excluded_parameters=(
-                    frozenset(
-                        (action_injections[action_item].parameter_name,)
+                excluded_parameters=frozenset(
+                    plan.parameter_name
+                    for plan in (
+                        action_injections[action_item],
+                        action_query_injections[action_item],
                     )
-                    if action_injections[action_item] is not None
-                    else frozenset()
+                    if plan is not None
                 ),
             )
 
@@ -532,6 +690,8 @@ def _compile_automaton(automaton_type: type[Automaton[Any]]) -> AutomatonDefinit
         guards=guards,
         actions=actions,
         action_injections=MappingProxyType(action_injections),
+        guard_query_injections=MappingProxyType(guard_query_injections),
+        action_query_injections=MappingProxyType(action_query_injections),
         transitions=transitions,
     )
 

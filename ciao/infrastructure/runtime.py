@@ -21,12 +21,14 @@ from ciao.domain.model import (
     State,
 )
 from ciao.domain.operations import Operation, OperationDirection, OperationKind
+from ciao.domain.query import Queries, Query, _create_query_scope
 from ciao.domain.transition import Behavior, Transition
 
 from .compiler import (
     ActionInjectionPlan,
     AutomatonDefinition,
     CompiledProgram,
+    QueryInjectionPlan,
     compile_program,
 )
 from .errors import (
@@ -35,6 +37,7 @@ from .errors import (
     GuardExecutionError,
     InvalidRuntimeCallError,
     NoTransitionError,
+    QueryExecutionError,
     QueryRoutingError,
     RuntimeExecutionError,
     StepLimitExceeded,
@@ -176,7 +179,6 @@ class Runtime:
         for object_ref in program.objects:
             definition = self._compiled.definitions[object_ref.automaton]
             context = deepcopy(object_ref.initial_context)
-            context._ciao_bind(self, object_ref)
             self._objects[object_ref] = _RuntimeObject(
                 definition=definition,
                 automaton=object_ref.automaton(),
@@ -263,49 +265,81 @@ class Runtime:
 
     def query(
         self,
-        source: AutomatonContext | AutomatonObject,
+        target_object: AutomatonObject,
         operation: Operation,
         *args: Any,
         **kwargs: Any,
     ) -> Any:
-        """Выполняет required-запрос из контекста или внешний provided-запрос."""
+        """Выполняет внешний вызов provided-query конкретного объекта."""
 
-        if isinstance(source, AutomatonContext):
-            object_ref = getattr(source, "_ciao_object_ref", None)
-            if object_ref is None or object_ref not in self._objects:
-                raise QueryRoutingError("Контекст не принадлежит этому Runtime")
-            if not (
-                operation.kind is OperationKind.QUERY
-                and operation.direction is OperationDirection.REQUIRED
-            ):
-                raise InvalidRuntimeCallError("self.query принимает required-запрос")
-            self._ensure_endpoint_owner(object_ref, operation)
-            target = self._route(object_ref, operation)
-        else:
-            object_ref = source
-            self._object(object_ref)
-            if not (
-                operation.kind is OperationKind.QUERY
-                and operation.direction is OperationDirection.PROVIDED
-            ):
-                raise InvalidRuntimeCallError("Runtime.query принимает provided-запрос")
-            self._ensure_endpoint_owner(object_ref, operation)
-            target = Endpoint(object_ref, operation)
-
+        self._object(target_object)
+        if not (
+            operation.kind is OperationKind.QUERY
+            and operation.direction is OperationDirection.PROVIDED
+        ):
+            raise InvalidRuntimeCallError("Runtime.query принимает provided-запрос")
+        self._ensure_endpoint_owner(target_object, operation)
+        target = Endpoint(target_object, operation)
         parameters = operation.bind_payload(*args, **kwargs)
-        if isinstance(source, AutomatonContext):
-            parameters = self._translate_parameters(
-                operation,
-                target.operation,
-                parameters,
+        return self._execute_query(None, target, parameters)
+
+    def _query_from_capability(
+        self,
+        frame: _ExecutionFrame,
+        operation: Operation,
+        args: tuple[Any, ...],
+        kwargs: dict[str, Any],
+    ) -> Any:
+        """Выполняет required-query capability текущего Guard или Action."""
+
+        if self._active_frame is not frame or frame.phase not in ("guard", "action"):
+            raise InvalidRuntimeCallError(
+                "Query не принадлежит текущему Guard или Action"
             )
+        if not (
+            operation.kind is OperationKind.QUERY
+            and operation.direction is OperationDirection.REQUIRED
+        ):
+            raise InvalidRuntimeCallError("Query принимает только required-query")
+        self._ensure_endpoint_owner(frame.object_ref, operation)
+        source = Endpoint(frame.object_ref, operation)
+        target = self._route(frame.object_ref, operation)
+        parameters = operation.bind_payload(*args, **kwargs)
+        target_parameters = self._translate_parameters(
+            operation,
+            target.operation,
+            parameters,
+        )
+        return self._execute_query(source, target, target_parameters)
+
+    def _execute_query(
+        self,
+        source: Endpoint | None,
+        target: Endpoint,
+        parameters: Mapping[str, Any],
+    ) -> Any:
+        """Исполняет provider и добавляет предметный контекст к его ошибке."""
+
         if target in self._query_stack:
             raise QueryRoutingError(
                 f"Обнаружен рекурсивный цикл запросов на {target.operation.qualified_name}"
             )
         self._query_stack.append(target)
         try:
-            return self._invoke_query(target, parameters)
+            try:
+                return self._invoke_query(target, parameters)
+            except (QueryExecutionError, QueryRoutingError):
+                raise
+            except Exception as error:
+                source_name = (
+                    f"{source.object.name}.{source.operation.name}"
+                    if source is not None
+                    else "внешнее окружение"
+                )
+                raise QueryExecutionError(
+                    f"Ошибка Query {source_name} -> "
+                    f"{target.object.name}.{target.operation.name}: {error}"
+                ) from error
         finally:
             self._query_stack.pop()
 
@@ -336,18 +370,35 @@ class Runtime:
         )
         accepted_transitions: list[Transition] = []
         for item in (item for item in matching if item.guard is not None):
-            self._active_frame = _ExecutionFrame(
+            frame = _ExecutionFrame(
                 message.target,
                 runtime_object.context,
                 "guard",
                 [],
             )
+            self._active_frame = frame
+            query_plan = runtime_object.definition.guard_query_injections[item.guard]
+            query_capability = self._create_query_capability(
+                query_plan,
+                item.guard.qualified_name,
+                frame,
+            )
+            injected = (
+                {query_plan.parameter_name: query_capability}
+                if query_plan is not None and query_capability is not None
+                else {}
+            )
             try:
-                accepted = self._invoke_behavior(
-                    item.guard,
-                    runtime_object,
-                    message.parameters,
-                )
+                try:
+                    accepted = self._invoke_behavior(
+                        item.guard,
+                        runtime_object,
+                        message.parameters,
+                        injected=injected,
+                    )
+                finally:
+                    if query_capability is not None:
+                        query_capability._ciao_invalidate()
             except Exception as error:
                 wrapped = GuardExecutionError(
                     f"Ошибка Guard {item.guard.qualified_name}: {error}"
@@ -397,17 +448,25 @@ class Runtime:
         self._active_frame = frame
         try:
             for action_item in selected.actions:
-                plan = runtime_object.definition.action_injections[action_item]
-                capability = self._create_action_capability(
-                    plan,
+                emission_plan = runtime_object.definition.action_injections[action_item]
+                query_plan = runtime_object.definition.action_query_injections[
+                    action_item
+                ]
+                emission_capability = self._create_action_capability(
+                    emission_plan,
                     action_item.qualified_name,
                     frame,
                 )
-                injected = (
-                    {plan.parameter_name: capability}
-                    if plan is not None and capability is not None
-                    else {}
+                query_capability = self._create_query_capability(
+                    query_plan,
+                    action_item.qualified_name,
+                    frame,
                 )
+                injected: dict[str, Any] = {}
+                if emission_plan is not None and emission_capability is not None:
+                    injected[emission_plan.parameter_name] = emission_capability
+                if query_plan is not None and query_capability is not None:
+                    injected[query_plan.parameter_name] = query_capability
                 try:
                     self._invoke_behavior(
                         action_item,
@@ -416,8 +475,10 @@ class Runtime:
                         injected=injected,
                     )
                 finally:
-                    if capability is not None:
-                        capability._ciao_invalidate()
+                    if emission_capability is not None:
+                        emission_capability._ciao_invalidate()
+                    if query_capability is not None:
+                        query_capability._ciao_invalidate()
         except Exception as error:
             wrapped = ActionExecutionError(
                 f"Ошибка Action в переходе {selected.qualified_name}: {error}"
@@ -535,6 +596,29 @@ class Runtime:
         if plan.capability_type is Emit:
             return Emit._ciao_create(scope, plan.commands[0])
         return Emits._ciao_create(scope, plan.commands)
+
+    def _create_query_capability(
+        self,
+        plan: QueryInjectionPlan | None,
+        behavior_name: str,
+        frame: _ExecutionFrame,
+    ) -> Query | Queries | None:
+        if plan is None:
+            return None
+
+        scope = _create_query_scope(
+            behavior_name,
+            lambda operation, args, kwargs: self._query_from_capability(
+                frame,
+                operation,
+                args,
+                kwargs,
+            ),
+            InvalidRuntimeCallError,
+        )
+        if plan.capability_type is Query:
+            return Query._ciao_create(scope, plan.queries[0])
+        return Queries._ciao_create(scope, plan.queries)
 
     def _invoke_query(self, endpoint: Endpoint, parameters: Mapping[str, Any]) -> Any:
         runtime_object = self._object(endpoint.object)

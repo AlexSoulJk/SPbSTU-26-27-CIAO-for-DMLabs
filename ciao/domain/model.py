@@ -2,10 +2,9 @@
 
 from __future__ import annotations
 
-from copy import deepcopy
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Generic, Protocol, TypeVar, get_args, get_origin
+from typing import Any, Generic, TypeVar, get_args, get_origin
 
 
 class State:
@@ -36,43 +35,11 @@ class State:
         )
 
 
-class RuntimeServices(Protocol):
-    """Закрытый мост от декларативного автомата к runtime."""
-
-    def query(
-        self,
-        ctx: AutomatonContext,
-        operation: Any,
-        *args: Any,
-        **kwargs: Any,
-    ) -> Any: ...
-
-
 class AutomatonContext:
     """Базовый тип пользовательского контекста одного автоматного объекта."""
 
-    def _ciao_bind(self, services: RuntimeServices, object_ref: AutomatonObject) -> None:
-        object.__setattr__(self, "_ciao_services", services)
-        object.__setattr__(self, "_ciao_object_ref", object_ref)
-
-    def _ciao_runtime_services(self) -> RuntimeServices:
-        services = getattr(self, "_ciao_services", None)
-        if services is None:
-            raise RuntimeError("Контекст не привязан к Runtime")
-        return services
-
-    def __deepcopy__(self, memo: dict[int, Any]) -> AutomatonContext:
-        # Runtime-ссылки намеренно не копируются в снимки и новые запуски.
-        copied = self.__class__.__new__(self.__class__)
-        memo[id(self)] = copied
-        for name, value in vars(self).items():
-            if not name.startswith("_ciao_"):
-                object.__setattr__(copied, name, deepcopy(value, memo))
-        return copied
-
 
 ContextT = TypeVar("ContextT", bound=AutomatonContext)
-ResultT = TypeVar("ResultT")
 
 
 class AutomatonRole(str, Enum):
@@ -101,19 +68,6 @@ class Automaton(Generic[ContextT]):
             ):
                 cls._context_type = context_type
                 break
-
-    def query(
-        self,
-        ctx: ContextT,
-        operation: Any,
-        /,
-        *args: Any,
-        **kwargs: Any,
-    ) -> Any:
-        """Синхронно выполняет требуемый запрос через Connection."""
-
-        return ctx._ciao_runtime_services().query(ctx, operation, *args, **kwargs)
-
 
 class ControllerAutomaton(Automaton[ContextT], Generic[ContextT]):
     """Автомат роли Controller; роль не меняет семантику исполнения."""

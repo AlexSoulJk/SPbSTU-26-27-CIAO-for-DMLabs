@@ -31,11 +31,15 @@ class Operation:
         kind: OperationKind,
         direction: OperationDirection,
         external: bool = False,
+        text: str | None = None,
     ) -> None:
+        if text is not None and not isinstance(text, str):
+            raise TypeError("Operation.text должен быть строкой или None")
         self.function = function
         self.kind = kind
         self.direction = direction
         self.external = external
+        self._text = text
         self.name = function.__name__
         self.owner: type[Any] | None = None
         self.__doc__ = function.__doc__
@@ -52,6 +56,12 @@ class Operation:
     def qualified_name(self) -> str:
         owner_name = self.owner.__name__ if self.owner is not None else "<unbound>"
         return f"{owner_name}.{self.name}"
+
+    @property
+    def text(self) -> str | None:
+        """Необязательное описание required-операции для диаграммы."""
+
+        return self._text
 
     @property
     def declared_signature(self) -> Signature:
@@ -92,13 +102,25 @@ def _operation(
     kind: OperationKind,
     direction: OperationDirection,
     external: bool = False,
+    text: str | None = None,
 ) -> Operation:
     return Operation(
         function,
         kind=kind,
         direction=direction,
         external=external,
+        text=text,
     )
+
+
+_MISSING = object()
+_OperationDecorator = Callable[[Callable[..., Any]], Operation]
+
+
+def _validated_text(value: object, decorator_name: str) -> str:
+    if not isinstance(value, str):
+        raise TypeError(f"{decorator_name}: text должен быть строкой")
+    return value
 
 
 @overload
@@ -135,14 +157,50 @@ def provided_command(
     return decorate(function) if function is not None else decorate
 
 
-def required_command(function: Callable[..., Any]) -> Operation:
-    """Объявляет команду, требуемую автоматным классом."""
+@overload
+def required_command(function: Callable[..., Any], /) -> Operation: ...
 
-    return _operation(
-        function,
-        kind=OperationKind.COMMAND,
-        direction=OperationDirection.REQUIRED,
-    )
+
+@overload
+def required_command(*, text: str) -> _OperationDecorator: ...
+
+
+def required_command(
+    function: Callable[..., Any] | object = _MISSING,
+    /,
+    *,
+    text: str | object = _MISSING,
+) -> Operation | _OperationDecorator:
+    """Объявляет required-команду и необязательный текст для диаграммы."""
+
+    has_function = function is not _MISSING
+    has_text = text is not _MISSING
+    if has_function:
+        if has_text:
+            raise TypeError("Для text используйте параметризованный @required_command")
+        if not callable(function):
+            raise TypeError("@required_command может декорировать только callable")
+        return _operation(
+            function,
+            kind=OperationKind.COMMAND,
+            direction=OperationDirection.REQUIRED,
+        )
+    if not has_text:
+        raise TypeError(
+            "Форма @required_command() не поддерживается; "
+            "используйте @required_command"
+        )
+    validated_text = _validated_text(text, "@required_command")
+
+    def decorate(actual: Callable[..., Any]) -> Operation:
+        return _operation(
+            actual,
+            kind=OperationKind.COMMAND,
+            direction=OperationDirection.REQUIRED,
+            text=validated_text,
+        )
+
+    return decorate
 
 
 @overload
@@ -179,14 +237,49 @@ def provided_query(
     return decorate(function) if function is not None else decorate
 
 
-def required_query(function: Callable[..., Any]) -> Operation:
-    """Объявляет синхронный запрос, требуемый автоматным классом."""
+@overload
+def required_query(function: Callable[..., Any], /) -> Operation: ...
 
-    return _operation(
-        function,
-        kind=OperationKind.QUERY,
-        direction=OperationDirection.REQUIRED,
-    )
+
+@overload
+def required_query(*, text: str) -> _OperationDecorator: ...
+
+
+def required_query(
+    function: Callable[..., Any] | object = _MISSING,
+    /,
+    *,
+    text: str | object = _MISSING,
+) -> Operation | _OperationDecorator:
+    """Объявляет required-query и необязательный текст для диаграммы."""
+
+    has_function = function is not _MISSING
+    has_text = text is not _MISSING
+    if has_function:
+        if has_text:
+            raise TypeError("Для text используйте параметризованный @required_query")
+        if not callable(function):
+            raise TypeError("@required_query может декорировать только callable")
+        return _operation(
+            function,
+            kind=OperationKind.QUERY,
+            direction=OperationDirection.REQUIRED,
+        )
+    if not has_text:
+        raise TypeError(
+            "Форма @required_query() не поддерживается; используйте @required_query"
+        )
+    validated_text = _validated_text(text, "@required_query")
+
+    def decorate(actual: Callable[..., Any]) -> Operation:
+        return _operation(
+            actual,
+            kind=OperationKind.QUERY,
+            direction=OperationDirection.REQUIRED,
+            text=validated_text,
+        )
+
+    return decorate
 
 
 def operation_parameters(operation: Operation) -> tuple[Parameter, ...]:

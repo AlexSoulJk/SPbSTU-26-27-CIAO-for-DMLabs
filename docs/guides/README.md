@@ -26,11 +26,13 @@ from ciao import (
     AutomatonContext,
     ControllerAutomaton,
     Emit,
+    Query,
     State,
     action,
     guard,
     provided_command,
     required_command,
+    required_query,
     transition,
 )
 
@@ -97,7 +99,26 @@ class Controller(ControllerAutomaton[ControllerContext]):
 
 Переход `otherwise=True` является резервной ветвью одной группы `(source, event)`. Runtime вычисляет каждый обычный Guard ровно один раз: единственный истинный Guard выбирает свою ветвь, несколько истинных дают `AmbiguousTransitionError`, а при всех ложных выбирается `otherwise`. Сочетание `guard` и `otherwise` в одном переходе запрещено. Условная группа без резервной ветви компилируется с `MissingOtherwiseWarning`: в строгом режиме все ложные Guard приводят к `NoTransitionError`, в нестрогом — к диагностическому `IGNORED`.
 
-Требуемая команда указывается в `@action(emit=...)`, а Runtime внедряет временный `Emit`. Вызов `emit(...)` не требует повторно указывать команду или `ctx`. Для нескольких команд применяется `@action(emits=(draw, log))` и вызов `emits[self.draw](...)`. Требуемый запрос по-прежнему вызывается через `self.query(ctx, self.required_query, ...)`. Контекст не предоставляет публичных методов управления очередью.
+Требуемая команда указывается в `@action(emit=...)`, а Runtime внедряет временный `Emit`. Вызов `emit(...)` не требует повторно указывать команду или `ctx`. Для нескольких команд применяется `@action(emits=(draw, log))` и вызов `emits[self.draw](...)`.
+
+Синхронные запросы объявляются так же явно:
+
+```python
+@required_query(text="прочитать значение датчика")
+def sensor_value(self) -> int:
+    ...
+
+@guard(query=sensor_value, text="значение превышает порог")
+def above_threshold(
+    self,
+    ctx: ControllerContext,
+    threshold: int,
+    query: Query,
+) -> bool:
+    return query() > threshold
+```
+
+Для нескольких операций применяется `queries=(sensor_value, sensor_ready)` и параметр `queries: Queries`; конкретный запрос вызывается как `queries[self.sensor_value]()`. Query выполняется немедленно через настроенный `Connection`, не попадает в FIFO и не кэшируется. Capability нельзя сохранять для последующего использования. Контекст не содержит ссылку на Runtime и не предоставляет методов управления очередью. Полный небольшой пример расположен в [`examples/query_di.py`](../../examples/query_di.py).
 
 Цельный исполняемый пример с двумя автоматами, состояниями, переходами, соединением и headless-запуском находится в [`examples/test_mock_sample.py`](../../examples/test_mock_sample.py). Короткая точка запуска — `examples/array_sum.py`.
 
@@ -124,7 +145,7 @@ print(path)
 
 Операции из `Program.connections` отображаются в промежутке между автоматами как socket+ball: половина required завершается `halfCircle`, половина provided — `oval`, а над общим узлом остаётся только имя операции. В примере видны подписи `draw` и `draw_completed`. Полные сигнатуры операций остаются в `ciaoSignature`. Несколько связей между одной парой блоков выходят из разных точек и используют разнесённые полосы.
 
-На стрелке перехода provided-событие показывается компактной сигнатурой. Для `@guard(text="...")` и обычного `@action(text="...")` добавляется `name: text`; имя action выделяется жирным. Ветка `otherwise` показывается как `[else]`, получает метаданные `ciaoOtherwise=true` и располагается после Guard-ветвей. Если action содержит `emit`/`emits`, его собственные имя и `text` опускаются, а сигнатуры исходящих required-команд показываются в порядке кортежа. Каждый action и каждая emit-команда начинаются с новой строки, а `/` ставится только перед первой строкой общего блока действий. Внутри самой записи генератор переносов не добавляет. Размер редактируемого текстового поля рассчитывается по содержимому, а ближайшая свободная позиция выбирается с небольшим зазором от стрелки.
+На стрелке перехода provided-событие показывается компактной сигнатурой. Для `@guard(text="...")` и обычного `@action(text="...")` добавляется `name: text`; имя action выделяется жирным. Запросы Guard/Action образуют отдельный блок `<<Query>>:` с одной сигнатурой на строку и сохраняются в метаданных `ciaoQueries`. Ветка `otherwise` показывается как `[else]`, получает метаданные `ciaoOtherwise=true` и располагается после Guard-ветвей. Если action содержит `emit`/`emits`, его собственные имя и `text` опускаются, а сигнатуры исходящих required-команд показываются в порядке кортежа. Каждый action и каждая emit-команда начинаются с новой строки, а `/` ставится только перед первой строкой общего блока действий. Внутри самой записи генератор переносов не добавляет. Размер редактируемого текстового поля рассчитывается по содержимому, а ближайшая свободная позиция выбирается с небольшим зазором от стрелки.
 
 Фон области автомата остаётся белым. Цвет роли применяется к состояниям и переходам: голубой для `Controller`, зелёный для `View`. Отдельная чёрная начальная точка не создаётся; начальное состояние определяется декларацией `State(initial=True)`.
 
@@ -141,6 +162,7 @@ py -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -e ".[dev]"
 .\.venv\Scripts\python.exe -m pytest
 .\.venv\Scripts\python.exe examples\array_sum.py
+.\.venv\Scripts\python.exe examples\query_di.py
 .\.venv\Scripts\python.exe examples\array_sum_tk.py
 .\.venv\Scripts\python.exe examples\export_drawio.py
 ```

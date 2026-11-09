@@ -16,6 +16,7 @@ from ciao import (
     ModelValidationError,
     NoTransitionError,
     Program,
+    Query,
     RunStatus,
     Runtime,
     State,
@@ -68,9 +69,9 @@ class Consumer(Automaton[ConsumerContext]):
     def source_value(self) -> int:
         ...
 
-    @action
-    def load_value(self, ctx: ConsumerContext) -> None:
-        ctx.received = self.query(ctx, self.source_value)
+    @action(query=source_value)
+    def load_value(self, ctx: ConsumerContext, query: Query) -> None:
+        ctx.received = query()
 
     on_load = transition(
         source=ready,

@@ -22,6 +22,7 @@ from .operations import (
     required_command,
     required_query,
 )
+from .query import Queries, Query
 from .transition import Action, Guard, Transition, action, guard, transition
 
 __all__ = [
@@ -41,6 +42,8 @@ __all__ = [
     "OperationDirection",
     "OperationKind",
     "Program",
+    "Queries",
+    "Query",
     "State",
     "Transition",
     "ViewAutomaton",

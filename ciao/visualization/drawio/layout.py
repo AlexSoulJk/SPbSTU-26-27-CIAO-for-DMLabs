@@ -217,7 +217,9 @@ def _transition_details(
     guard = getattr(transition, "guard")
     actions = getattr(transition, "actions")
     parts: list[str] = []
-    if guard is not None:
+    if getattr(transition, "otherwise"):
+        parts.append("[else]")
+    elif guard is not None:
         guard_label = escape(guard.name)
         if guard.text is not None:
             guard_label += f": {_user_text_html(guard.text)}"
@@ -230,6 +232,13 @@ def _transition_details(
         ]
         parts.append("/ " + "<br>".join(action_labels))
     return "<br>".join(parts)
+
+
+def _transition_metadata(transition: object) -> tuple[tuple[str, str], ...]:
+    metadata = [("ciaoTransition", getattr(transition, "name"))]
+    if getattr(transition, "otherwise"):
+        metadata.append(("ciaoOtherwise", "true"))
+    return tuple(metadata)
 
 
 def _transition_label(
@@ -527,6 +536,10 @@ def _layout_block(
     decision_index = 0
     reverse_lane = 0
     for (source, event), transition_views in grouped.items():
+        # Else не имеет runtime-приоритета, но завершает развилку визуально.
+        transition_views.sort(
+            key=lambda item: getattr(item.transition, "otherwise")
+        )
         source_id = state_ids[source]
         source_geometry = state_geometries[source]
         if len(transition_views) == 1:
@@ -580,7 +593,7 @@ def _layout_block(
                     target_id=state_ids[target],
                     points=points,
                     kind="transition",
-                    metadata=(("ciaoTransition", transition_view.transition.name),),
+                    metadata=_transition_metadata(transition_view.transition),
                     label_position=0,
                     label_offset=label_offset,
                     label_width=label_width,
@@ -690,7 +703,7 @@ def _layout_block(
                     target_id=state_ids[target],
                     points=branch_points,
                     kind="transitionBranch",
-                    metadata=(("ciaoTransition", transition_view.transition.name),),
+                    metadata=_transition_metadata(transition_view.transition),
                     label_position=0 if label else None,
                     label_offset=label_offset,
                     label_width=label_width,

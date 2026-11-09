@@ -96,16 +96,32 @@ class AmbiguousAutomaton(Automaton[AmbiguousContext]):
     def increment(self, ctx: AmbiguousContext) -> None:
         ctx.count += 1
 
+    @guard
+    def first_enabled(self, ctx: AmbiguousContext) -> bool:
+        return True
+
+    @guard
+    def second_enabled(self, ctx: AmbiguousContext) -> bool:
+        return True
+
     first = transition(
         source=ready,
         event=fire,
+        guard=first_enabled,
         actions=(increment,),
         target=ready,
     )
     second = transition(
         source=ready,
         event=fire,
+        guard=second_enabled,
         actions=(increment,),
+        target=ready,
+    )
+    fallback = transition(
+        source=ready,
+        event=fire,
+        otherwise=True,
         target=ready,
     )
 

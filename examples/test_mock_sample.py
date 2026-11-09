@@ -83,11 +83,6 @@ class SumController(ControllerAutomaton[SumContext]):
         """Текущий индекс всё ещё указывает на элемент массива."""
         return not self._is_out_of_bounds(ctx)
 
-    @guard(text="\nindex >= len(values)")
-    def is_complete(self, ctx: SumContext) -> bool:
-        """Текущий индекс уже вышел за границу массива."""
-        return self._is_out_of_bounds(ctx)
-
     @staticmethod
     def _is_out_of_bounds(ctx: SumContext) -> bool:
         """Задаёт единственное бинарное условие развилки в ``running``."""
@@ -153,7 +148,7 @@ class SumController(ControllerAutomaton[SumContext]):
     on_tick_when_complete = transition(
         source=running,
         event=tick,
-        guard=is_complete,
+        otherwise=True,
         actions=(),
         target=done,
     )

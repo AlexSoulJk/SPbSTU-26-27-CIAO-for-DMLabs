@@ -142,6 +142,13 @@ class MultiEmitConsumer(ControllerAutomaton[QueryContext]):
         target=ready,
     )
 
+    otherwise_trigger = transition(
+        source=ready,
+        event=trigger,
+        otherwise=True,
+        target=ready,
+    )
+
 
 class DrawioTests(unittest.TestCase):
     def _export_sample(self, directory: str) -> tuple[Path, ET.Element]:
@@ -357,6 +364,28 @@ class DrawioTests(unittest.TestCase):
         self.assertIn("draw(values, index, total, tick_count)", view_label)
         self.assertIn("draw_completed()", view_label)
         self.assertNotIn("notify_draw_completed", view_label)
+
+    def test_otherwise_branch_is_last_and_marked_as_else(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            _, root = self._export_sample(directory)
+
+        branches = [
+            cell
+            for cell in root.findall(".//mxCell")
+            if cell.get("ciaoTransition")
+            in {
+                "on_tick_with_current_element",
+                "on_tick_when_complete",
+            }
+        ]
+        self.assertEqual(
+            ["on_tick_with_current_element", "on_tick_when_complete"],
+            [cell.get("ciaoTransition") for cell in branches],
+        )
+        guarded, fallback = branches
+        self.assertIsNone(guarded.get("ciaoOtherwise"))
+        self.assertEqual("true", fallback.get("ciaoOtherwise"))
+        self.assertIn("[else]", fallback.get("value", ""))
 
     def test_emits_preserves_declared_command_order_in_transition(self) -> None:
         consumer = AutomatonObject(

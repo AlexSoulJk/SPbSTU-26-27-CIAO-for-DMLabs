@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import warnings
 from dataclasses import dataclass
 from inspect import Parameter, Signature, _empty, signature
 from types import MappingProxyType, NoneType
@@ -22,7 +23,7 @@ from ciao.domain.model import (
 from ciao.domain.operations import Operation, OperationDirection, OperationKind
 from ciao.domain.transition import Action, Behavior, Guard, Transition
 
-from .errors import ModelValidationError
+from .errors import MissingOtherwiseWarning, ModelValidationError
 
 
 @dataclass(frozen=True)
@@ -360,6 +361,55 @@ def _validate_guard_has_no_capability(
         )
 
 
+def _validate_transition_groups(
+    automaton_type: type[Automaton[Any]],
+    transitions: tuple[Transition, ...],
+) -> None:
+    """Проверяет взаимоисключающие формы переходов одной группы."""
+
+    groups: dict[tuple[State, Operation], list[Transition]] = {}
+    for item in transitions:
+        if item.guard is not None and item.otherwise:
+            raise ModelValidationError(
+                f"{item.qualified_name}: guard нельзя сочетать с otherwise=True"
+            )
+        groups.setdefault((item.source, item.event), []).append(item)
+
+    for (source, event), group in groups.items():
+        fallback = tuple(item for item in group if item.otherwise)
+        guarded = tuple(item for item in group if item.guard is not None)
+        unconditional = tuple(
+            item
+            for item in group
+            if item.guard is None and not item.otherwise
+        )
+        group_name = (
+            f"{automaton_type.__name__}: состояние {source.name}, "
+            f"событие {event.name}"
+        )
+
+        if len(fallback) > 1:
+            raise ModelValidationError(
+                f"{group_name}: разрешён только один переход otherwise"
+            )
+        if unconditional and len(group) > 1:
+            raise ModelValidationError(
+                f"{group_name}: безусловный переход нельзя смешивать "
+                "с альтернативами; используйте otherwise=True"
+            )
+        if fallback and not guarded:
+            raise ModelValidationError(
+                f"{group_name}: otherwise требует хотя бы один переход с Guard"
+            )
+        if guarded and not fallback:
+            warnings.warn(
+                f"{group_name}: условная группа не содержит otherwise; "
+                "если все Guard ложны, применимый переход отсутствует",
+                MissingOtherwiseWarning,
+                stacklevel=4,
+            )
+
+
 def _compile_automaton(automaton_type: type[Automaton[Any]]) -> AutomatonDefinition:
     context_type = getattr(automaton_type, "_context_type", None)
     if not isinstance(context_type, type) or not issubclass(context_type, AutomatonContext):
@@ -468,6 +518,8 @@ def _compile_automaton(automaton_type: type[Automaton[Any]]) -> AutomatonDefinit
                     else frozenset()
                 ),
             )
+
+    _validate_transition_groups(automaton_type, transitions)
 
     return AutomatonDefinition(
         automaton_type=automaton_type,

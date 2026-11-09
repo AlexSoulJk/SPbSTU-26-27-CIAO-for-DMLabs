@@ -85,7 +85,11 @@ class Action(Behavior):
 
 
 class Transition:
-    """Декларативное правило перехода между управляющими состояниями."""
+    """Декларативное правило перехода между управляющими состояниями.
+
+    ``otherwise=True`` задаёт явную резервную ветвь группы ``(source, event)``.
+    Совместимость с Guard и соседними переходами проверяет компилятор.
+    """
 
     def __init__(
         self,
@@ -95,12 +99,16 @@ class Transition:
         target: State,
         guard: Guard | None = None,
         actions: tuple[Action, ...] = (),
+        otherwise: bool = False,
     ) -> None:
+        if type(otherwise) is not bool:
+            raise TypeError("Transition.otherwise должен иметь точный тип bool")
         self.source = source
         self.event = event
         self.target = target
         self.guard = guard
         self.actions = tuple(actions)
+        self.otherwise = otherwise
         self.name = "<unnamed>"
         self.owner: type[Any] | None = None
 
@@ -261,8 +269,9 @@ def transition(
     target: State,
     guard: Guard | None = None,
     actions: tuple[Action, ...] = (),
+    otherwise: bool = False,
 ) -> Transition:
-    """Создаёт декларативный переход как class-атрибут автомата."""
+    """Создаёт обычный или резервный переход как class-атрибут автомата."""
 
     return Transition(
         source=source,
@@ -270,4 +279,5 @@ def transition(
         target=target,
         guard=guard,
         actions=actions,
+        otherwise=otherwise,
     )

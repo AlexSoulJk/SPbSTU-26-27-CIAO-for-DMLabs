@@ -9,6 +9,10 @@ class ModelValidationError(CiaoError):
     """Декларативная модель противоречит контракту MVP."""
 
 
+class MissingOtherwiseWarning(UserWarning):
+    """Условная группа переходов не содержит резервную ветвь."""
+
+
 class RuntimeExecutionError(CiaoError):
     """Ошибка во время исполнения скомпилированной модели."""
 

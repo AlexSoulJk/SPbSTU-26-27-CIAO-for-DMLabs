@@ -106,6 +106,7 @@ class StepResult:
     result: Any = None
     emitted: tuple[EmittedMessage, ...] = ()
     error: str | None = None
+    transition: str | None = None
 
 
 @dataclass(frozen=True)
@@ -122,6 +123,7 @@ class TraceEvent:
     result: Any
     emitted: tuple[EmittedMessage, ...]
     error: str | None = None
+    transition: str | None = None
 
 
 @dataclass(frozen=True)
@@ -323,11 +325,17 @@ class Runtime:
             for item in runtime_object.definition.transitions
             if item.source is source_state and item.event is message.operation
         )
-        applicable: list[Transition] = []
-        for item in matching:
-            if item.guard is None:
-                applicable.append(item)
-                continue
+        fallback = next((item for item in matching if item.otherwise), None)
+        unconditional = next(
+            (
+                item
+                for item in matching
+                if item.guard is None and not item.otherwise
+            ),
+            None,
+        )
+        accepted_transitions: list[Transition] = []
+        for item in (item for item in matching if item.guard is not None):
             self._active_frame = _ExecutionFrame(
                 message.target,
                 runtime_object.context,
@@ -349,27 +357,37 @@ class Runtime:
             finally:
                 self._active_frame = None
             if accepted:
-                applicable.append(item)
+                accepted_transitions.append(item)
 
-        if len(applicable) > 1:
+        if len(accepted_transitions) > 1:
             error = AmbiguousTransitionError(
                 f"Для {message.target.name}.{message.operation.name} применимы "
-                f"{len(applicable)} перехода"
+                f"{len(accepted_transitions)} перехода"
             )
             self._record_error(message, source_state, error)
             raise error
 
-        if not applicable:
+        selected = (
+            accepted_transitions[0]
+            if accepted_transitions
+            else fallback or unconditional
+        )
+        if selected is None:
+            missing_group = not matching
+            reason = (
+                f"Для состояния {source_state.name} и события "
+                f"{message.operation.name} переходы не объявлены"
+                if missing_group
+                else f"Все Guard ложны, ветвь otherwise отсутствует для "
+                f"{message.target.name}.{message.operation.name} в состоянии "
+                f"{source_state.name}"
+            )
             if self.strict:
-                error = NoTransitionError(
-                    f"Нет перехода для {message.target.name}.{message.operation.name} "
-                    f"в состоянии {source_state.name}"
-                )
+                error = NoTransitionError(reason)
                 self._record_error(message, source_state, error)
                 raise error
-            return self._record_ignored(message, source_state)
+            return self._record_ignored(message, source_state, reason)
 
-        selected = applicable[0]
         frame = _ExecutionFrame(
             message.target,
             runtime_object.context,
@@ -404,7 +422,12 @@ class Runtime:
             wrapped = ActionExecutionError(
                 f"Ошибка Action в переходе {selected.qualified_name}: {error}"
             )
-            self._record_error(message, source_state, wrapped)
+            self._record_error(
+                message,
+                source_state,
+                wrapped,
+                transition=selected.name,
+            )
             raise wrapped from error
         finally:
             self._active_frame = None
@@ -417,6 +440,7 @@ class Runtime:
             status=StepStatus.PROCESSED,
             object_name=message.target.name,
             operation=message.operation.name,
+            transition=selected.name,
             source_state=source_state.name,
             target_state=selected.target.name,
             parameters=_frozen_mapping(message.parameters),
@@ -522,7 +546,12 @@ class Runtime:
             arguments.append(runtime_object.context)
         return endpoint.operation.function(*arguments, **dict(parameters))
 
-    def _record_ignored(self, message: _Message, state: State) -> StepResult:
+    def _record_ignored(
+        self,
+        message: _Message,
+        state: State,
+        reason: str,
+    ) -> StepResult:
         result = StepResult(
             step_number=self._step_number,
             status=StepStatus.IGNORED,
@@ -531,7 +560,7 @@ class Runtime:
             source_state=state.name,
             target_state=state.name,
             parameters=_frozen_mapping(message.parameters),
-            error="Применимый переход отсутствует",
+            error=reason,
         )
         self._record_trace(result)
         return result
@@ -541,12 +570,15 @@ class Runtime:
         message: _Message,
         state: State,
         error: Exception,
+        *,
+        transition: str | None = None,
     ) -> None:
         result = StepResult(
             step_number=self._step_number,
             status=StepStatus.ERROR,
             object_name=message.target.name,
             operation=message.operation.name,
+            transition=transition,
             source_state=state.name,
             target_state=state.name,
             parameters=_frozen_mapping(message.parameters),
@@ -562,6 +594,7 @@ class Runtime:
             status=result.status,
             object_name=result.object_name,
             operation=result.operation,
+            transition=result.transition,
             source_state=result.source_state or "",
             target_state=result.target_state or "",
             parameters=result.parameters,

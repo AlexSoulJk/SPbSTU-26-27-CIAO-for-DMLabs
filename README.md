@@ -22,13 +22,16 @@ py -m venv .venv
 ## Headless-пример
 
 ```powershell
-.venv\Scripts\python examples\array_sum.py
+.venv\Scripts\python -m examples.array_sum.array_sum
 ```
+
+Помимо результата команда печатает последовательную трассу операций runtime:
+переходы состояний и созданные ими сообщения `emit`.
 
 ## Tkinter-пример
 
 ```powershell
-.venv\Scripts\python examples\array_sum_tk.py
+.venv\Scripts\python -m examples.array_sum.array_sum_tk
 ```
 
 ## Экспорт диаграммы draw.io
@@ -41,13 +44,16 @@ py -m venv .venv
 
 ## Реализовано
 
-- декларативные `State`, включая `final=True`, операции, `Guard`, `Action` и `Transition`; `@guard`/`@action` поддерживают необязательный `text` для понятных подписей диаграммы;
+- декларативные `State`, включая `final=True`, операции, `Guard`, `Action` и `Transition`; переходы поддерживают явную резервную ветвь `otherwise=True`, а `@guard`/`@action` — необязательный `text` для диаграммы;
 - явные исходящие required-команды `Action` через `@action(emit=...)` / `@action(emits=(...))` и временные `Emit` / `Emits`;
 - типизированные контексты и роли `Automaton`, `ControllerAutomaton`, `ViewAutomaton`;
-- компиляция и валидация `Program`/`Connection`;
-- FIFO-runtime, синхронные запросы, трасса и снимки состояния;
+- компиляция и валидация `Program`/`Connection`, включая группы Guard/otherwise и `MissingOtherwiseWarning`;
+- FIFO-runtime, синхронные запросы, трасса с именем выбранного перехода и снимки состояния;
 - строгий/нестрогий режим и ограничение `run()`;
 - общий Tkinter-адаптер событий через `after` и отдельное представление примера суммы массива;
 - односторонний экспорт `Program → .drawio` с состояниями, переходами, интерфейсами и `Connection`.
 
-Цельный код декларации двух автоматов находится в `examples/test_mock_sample.py`. Архитектурные документы и руководства расположены в `docs/`.
+Пример суммы разделён на автоматные классы в `examples/array_sum/automatos`,
+сборку программы в `examples/array_sum/program.py`, предметный Tkinter-интерфейс
+в `examples/array_sum/ui` и отдельные точки headless- и GUI-запуска.
+Архитектурные документы и руководства расположены в `docs/`.

@@ -6,12 +6,10 @@ import tkinter as tk
 
 from ciao import Runtime
 from ciao.visualization import TkTraceAdapter
-from ciao.visualization.array_sample import ArraySumView
 
-try:
-    from .test_mock_sample import SumController, build_sample
-except ImportError:
-    from test_mock_sample import SumController, build_sample
+from .automatos import SumController
+from .program import build_sample
+from .ui import ArraySumView
 
 
 def main() -> None:

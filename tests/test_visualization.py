@@ -7,7 +7,8 @@ from typing import Any
 
 from ciao import Runtime, TraceEvent
 from ciao.visualization import TkTraceAdapter
-from examples.test_mock_sample import SumController, build_sample
+from examples.array_sum.automatos import SumController
+from examples.array_sum.program import build_sample
 
 
 class FakeTkRoot:

@@ -30,14 +30,18 @@ from ciao import (
     required_query,
     transition,
 )
-from examples.test_mock_sample import (
-    SumController,
+from examples.array_sum.array_sum import (
+    calculate_sum,
+    format_operation_trace,
+    run_calculation,
+)
+from examples.array_sum.automatos import (
     SumContext,
+    SumController,
     SumView,
     ViewContext,
-    build_sample,
-    calculate_sum,
 )
+from examples.array_sum.program import build_sample
 
 
 @dataclass
@@ -273,6 +277,22 @@ class RuntimeTests(unittest.TestCase):
                 self.assertEqual(expected, total)
                 self.assertEqual(expected, view.total)
                 self.assertEqual(len(values), view.tick_count)
+
+    def test_array_sum_exposes_readable_operation_trace(self) -> None:
+        result = run_calculation([2])
+
+        self.assertEqual(
+            ["start", "tick", "draw", "draw_completed", "tick"],
+            [event.operation for event in result.trace],
+        )
+        rendered = format_operation_trace(result.trace)
+        self.assertIn("controller.start(values=(2,))", rendered)
+        self.assertIn(
+            "running --on_tick_with_current_element--> publishing",
+            rendered,
+        )
+        self.assertIn("emit -> view.draw(", rendered)
+        self.assertIn("controller.draw_completed()", rendered)
 
     def test_contexts_are_independent_between_runtimes(self) -> None:
         sample = build_sample()

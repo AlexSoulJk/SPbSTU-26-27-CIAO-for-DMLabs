@@ -34,7 +34,8 @@ from ciao import (
     transition,
 )
 from ciao.visualization.drawio import export_program_drawio
-from examples.test_mock_sample import SumController, SumView, build_sample
+from examples.array_sum.automatos import SumController, SumView
+from examples.array_sum.program import build_sample
 
 
 def _cells(root: ET.Element, kind: str) -> list[ET.Element]:

@@ -160,8 +160,8 @@ class ArraySumView(ttk.Frame):
         self._ticks.set_value(tick_count)
         self._state.configure(text=f"Состояние: {state_name}")
 
-        # Кнопки взаимоисключающие: команда start доступна только до перехода
-        # из idle, после него пользователь управляет обычными командами tick.
+        # Кнопки взаимоисключающие: start доступна только до перехода из idle,
+        # после него пользователь управляет обычными командами tick.
         if show_initialize:
             self._step.set_enabled(False)
             self._step.grid_remove()

@@ -26,7 +26,8 @@ from ciao import (
     provided_command,
     transition,
 )
-from examples.test_mock_sample import SumController, build_sample
+from examples.array_sum.automatos import SumController
+from examples.array_sum.program import build_sample
 
 
 @dataclass

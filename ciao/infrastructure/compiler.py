@@ -5,9 +5,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from inspect import Parameter, Signature, _empty, signature
 from types import MappingProxyType, NoneType
-from typing import Any, Mapping, get_type_hints
+from typing import Any, Mapping, get_args, get_type_hints
 
 from ciao.domain.connections import Endpoint
+from ciao.domain.emission import Emit, Emits
 from ciao.domain.model import (
     Automaton,
     AutomatonContext,
@@ -44,6 +45,15 @@ class OperationSignature:
 
 
 @dataclass(frozen=True)
+class ActionInjectionPlan:
+    """Проверенный план внедрения capability в один Action."""
+
+    parameter_name: str
+    capability_type: type[Emit] | type[Emits]
+    commands: tuple[Operation, ...]
+
+
+@dataclass(frozen=True)
 class AutomatonDefinition:
     """Проверенное описание одного автоматного класса."""
 
@@ -56,6 +66,7 @@ class AutomatonDefinition:
     operation_signatures: Mapping[Operation, OperationSignature]
     guards: tuple[Guard, ...]
     actions: tuple[Action, ...]
+    action_injections: Mapping[Action, ActionInjectionPlan | None]
     transitions: tuple[Transition, ...]
 
 
@@ -77,12 +88,18 @@ def _declared_members(owner: type[Any], member_type: type[Any]) -> tuple[Any, ..
     return tuple(dict.fromkeys(members))
 
 
-def _type_hints(function: Any, owner: type[Any]) -> dict[str, Any]:
+def _type_hints(
+    function: Any,
+    owner: type[Any],
+    *,
+    include_extras: bool = False,
+) -> dict[str, Any]:
     try:
         return get_type_hints(
             function,
             globalns=function.__globals__,
             localns=dict(vars(owner)),
+            include_extras=include_extras,
         )
     except Exception as error:
         raise ModelValidationError(
@@ -177,6 +194,8 @@ def _validate_handler_for_event(
     behavior: Behavior,
     event: Operation,
     event_signature: OperationSignature,
+    *,
+    excluded_parameters: frozenset[str] = frozenset(),
 ) -> None:
     owner = behavior.owner
     if owner is None:
@@ -188,6 +207,8 @@ def _validate_handler_for_event(
         for parameter in event_signature.parameters
     }
     for parameter in parameters:
+        if parameter.name in excluded_parameters:
+            continue
         if parameter.name not in event_parameters:
             raise ModelValidationError(
                 f"{behavior.qualified_name}: параметр {parameter.name!r} отсутствует "
@@ -200,6 +221,143 @@ def _validate_handler_for_event(
                 f"{behavior.qualified_name}: тип параметра {parameter.name!r} "
                 f"несовместим с {event.qualified_name}"
             )
+
+
+def _is_capability_annotation(annotation: Any) -> bool:
+    """Находит также запрещённые Optional/Annotated/подтипы capability."""
+
+    if annotation in (Emit, Emits):
+        return True
+    if isinstance(annotation, type) and issubclass(annotation, (Emit, Emits)):
+        return True
+    return any(_is_capability_annotation(item) for item in get_args(annotation))
+
+
+def _compile_action_injection(
+    action_item: Action,
+    automaton_type: type[Automaton[Any]],
+    operations: tuple[Operation, ...],
+) -> ActionInjectionPlan | None:
+    if action_item.emit is not None and action_item.emits is not None:
+        raise ModelValidationError(
+            f"{action_item.qualified_name}: emit и emits взаимоисключаются"
+        )
+    if action_item.emits is not None:
+        if not isinstance(action_item.emits, tuple):
+            raise ModelValidationError(
+                f"{action_item.qualified_name}: emits должен быть кортежем"
+            )
+        if not action_item.emits:
+            raise ModelValidationError(
+                f"{action_item.qualified_name}: emits должен быть непустым"
+            )
+
+    commands = action_item.outgoing_commands
+    seen: set[Operation] = set()
+    for command in commands:
+        if not isinstance(command, Operation):
+            raise ModelValidationError(
+                f"{action_item.qualified_name}: emit/emits должен ссылаться "
+                "на @required_command"
+            )
+        if command in seen:
+            raise ModelValidationError(
+                f"{action_item.qualified_name}: команда {command.qualified_name} "
+                "повторена в emits"
+            )
+        seen.add(command)
+        if command not in operations:
+            raise ModelValidationError(
+                f"{action_item.qualified_name}: команда {command.qualified_name} "
+                f"не принадлежит {automaton_type.__name__}"
+            )
+        if not (
+            command.kind is OperationKind.COMMAND
+            and command.direction is OperationDirection.REQUIRED
+        ):
+            raise ModelValidationError(
+                f"{action_item.qualified_name}: {command.qualified_name} "
+                "не является required-командой"
+            )
+
+    # include_extras нужен, чтобы Annotated[Emit, ...] не стал
+    # незаметно эквивалентен разрешённому точному типу Emit.
+    hints = _type_hints(
+        action_item.function,
+        automaton_type,
+        include_extras=True,
+    )
+    parameters = _function_parameters(action_item.function)[1:]
+    related = [
+        parameter
+        for parameter in parameters
+        if _is_capability_annotation(hints.get(parameter.name, _empty))
+    ]
+
+    if not commands:
+        if related:
+            raise ModelValidationError(
+                f"{action_item.qualified_name}: capability-параметр разрешён "
+                "только для @action(emit=...) и @action(emits=...)"
+            )
+        return None
+
+    expected_type: type[Emit] | type[Emits]
+    expected_type = Emit if action_item.emit is not None else Emits
+    exact = [
+        parameter
+        for parameter in parameters
+        if hints.get(parameter.name, _empty) is expected_type
+    ]
+    if len(exact) != 1:
+        raise ModelValidationError(
+            f"{action_item.qualified_name}: ожидается ровно один параметр "
+            f"с точной аннотацией {expected_type.__name__}"
+        )
+    if any(parameter not in exact for parameter in related):
+        raise ModelValidationError(
+            f"{action_item.qualified_name}: допустима только точная "
+            f"аннотация {expected_type.__name__}"
+        )
+
+    parameter = exact[0]
+    if parameter.kind not in (
+        Parameter.POSITIONAL_OR_KEYWORD,
+        Parameter.KEYWORD_ONLY,
+    ):
+        raise ModelValidationError(
+            f"{action_item.qualified_name}: DI-параметр {parameter.name!r} "
+            "должен быть positional-or-keyword или keyword-only"
+        )
+    if parameter.default is not _empty:
+        raise ModelValidationError(
+            f"{action_item.qualified_name}: DI-параметр {parameter.name!r} "
+            "не должен иметь значение по умолчанию"
+        )
+    return ActionInjectionPlan(
+        parameter_name=parameter.name,
+        capability_type=expected_type,
+        commands=commands,
+    )
+
+
+def _validate_guard_has_no_capability(
+    guard_item: Guard,
+    automaton_type: type[Automaton[Any]],
+) -> None:
+    hints = _type_hints(
+        guard_item.function,
+        automaton_type,
+        include_extras=True,
+    )
+    parameters = _function_parameters(guard_item.function)[1:]
+    if any(
+        _is_capability_annotation(hints.get(parameter.name, _empty))
+        for parameter in parameters
+    ):
+        raise ModelValidationError(
+            f"{guard_item.qualified_name}: Emit/Emits можно внедрять только в Action"
+        )
 
 
 def _compile_automaton(automaton_type: type[Automaton[Any]]) -> AutomatonDefinition:
@@ -255,8 +413,15 @@ def _compile_automaton(automaton_type: type[Automaton[Any]]) -> AutomatonDefinit
 
     for item in guards:
         _validate_behavior(item, automaton_type, context_type, bool)
+        _validate_guard_has_no_capability(item, automaton_type)
+    action_injections: dict[Action, ActionInjectionPlan | None] = {}
     for item in actions:
         _validate_behavior(item, automaton_type, context_type, NoneType)
+        action_injections[item] = _compile_action_injection(
+            item,
+            automaton_type,
+            operations,
+        )
 
     for item in transitions:
         if item.owner is not automaton_type:
@@ -295,6 +460,13 @@ def _compile_automaton(automaton_type: type[Automaton[Any]]) -> AutomatonDefinit
                 action_item,
                 item.event,
                 operation_signatures[item.event],
+                excluded_parameters=(
+                    frozenset(
+                        (action_injections[action_item].parameter_name,)
+                    )
+                    if action_injections[action_item] is not None
+                    else frozenset()
+                ),
             )
 
     return AutomatonDefinition(
@@ -307,6 +479,7 @@ def _compile_automaton(automaton_type: type[Automaton[Any]]) -> AutomatonDefinit
         operation_signatures=MappingProxyType(operation_signatures),
         guards=guards,
         actions=actions,
+        action_injections=MappingProxyType(action_injections),
         transitions=transitions,
     )
 

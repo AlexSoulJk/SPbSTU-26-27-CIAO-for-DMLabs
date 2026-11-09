@@ -11,6 +11,7 @@ from types import MappingProxyType
 from typing import Any, Callable, Mapping
 
 from ciao.domain.connections import Endpoint
+from ciao.domain.emission import Emit, Emits, _create_emission_scope
 from ciao.domain.model import (
     Automaton,
     AutomatonContext,
@@ -22,7 +23,12 @@ from ciao.domain.model import (
 from ciao.domain.operations import Operation, OperationDirection, OperationKind
 from ciao.domain.transition import Behavior, Transition
 
-from .compiler import AutomatonDefinition, CompiledProgram, compile_program
+from .compiler import (
+    ActionInjectionPlan,
+    AutomatonDefinition,
+    CompiledProgram,
+    compile_program,
+)
 from .errors import (
     ActionExecutionError,
     AmbiguousTransitionError,
@@ -218,18 +224,19 @@ class Runtime:
         parameters = operation.bind_payload(*args, **kwargs)
         self._queue.append(_Message(target, operation, _message_mapping(parameters)))
 
-    def emit(
+    def _emit_from_capability(
         self,
-        ctx: AutomatonContext,
+        frame: _ExecutionFrame,
         operation: Operation,
-        *args: Any,
-        **kwargs: Any,
+        args: tuple[Any, ...],
+        kwargs: dict[str, Any],
     ) -> None:
-        """Буферизует required-команду активного действия."""
+        """Буферизует required-команду активной capability."""
 
-        frame = self._active_frame
-        if frame is None or frame.phase != "action" or frame.context is not ctx:
-            raise InvalidRuntimeCallError("emit разрешён только активному Action")
+        if self._active_frame is not frame or frame.phase != "action":
+            raise InvalidRuntimeCallError(
+                "Emit не принадлежит текущему Action"
+            )
         if not (
             operation.kind is OperationKind.COMMAND
             and operation.direction is OperationDirection.REQUIRED
@@ -372,7 +379,27 @@ class Runtime:
         self._active_frame = frame
         try:
             for action_item in selected.actions:
-                self._invoke_behavior(action_item, runtime_object, message.parameters)
+                plan = runtime_object.definition.action_injections[action_item]
+                capability = self._create_action_capability(
+                    plan,
+                    action_item.qualified_name,
+                    frame,
+                )
+                injected = (
+                    {plan.parameter_name: capability}
+                    if plan is not None and capability is not None
+                    else {}
+                )
+                try:
+                    self._invoke_behavior(
+                        action_item,
+                        runtime_object,
+                        message.parameters,
+                        injected=injected,
+                    )
+                finally:
+                    if capability is not None:
+                        capability._ciao_invalidate()
         except Exception as error:
             wrapped = ActionExecutionError(
                 f"Ошибка Action в переходе {selected.qualified_name}: {error}"
@@ -442,10 +469,14 @@ class Runtime:
         behavior: Behavior,
         runtime_object: _RuntimeObject,
         parameters: Mapping[str, Any],
+        *,
+        injected: Mapping[str, Any] = MappingProxyType({}),
     ) -> Any:
         function_parameters = list(signature(behavior.function).parameters.values())[2:]
-        selected: dict[str, Any] = {}
+        selected: dict[str, Any] = dict(injected)
         for parameter in function_parameters:
+            if parameter.name in injected:
+                continue
             if parameter.name in parameters:
                 selected[parameter.name] = parameters[parameter.name]
             elif parameter.default is Parameter.empty:
@@ -457,6 +488,29 @@ class Runtime:
             runtime_object.context,
             **selected,
         )
+
+    def _create_action_capability(
+        self,
+        plan: ActionInjectionPlan | None,
+        action_name: str,
+        frame: _ExecutionFrame,
+    ) -> Emit | Emits | None:
+        if plan is None:
+            return None
+
+        scope = _create_emission_scope(
+            action_name,
+            lambda operation, args, kwargs: self._emit_from_capability(
+                frame,
+                operation,
+                args,
+                kwargs,
+            ),
+            InvalidRuntimeCallError,
+        )
+        if plan.capability_type is Emit:
+            return Emit._ciao_create(scope, plan.commands[0])
+        return Emits._ciao_create(scope, plan.commands)
 
     def _invoke_query(self, endpoint: Endpoint, parameters: Mapping[str, Any]) -> Any:
         runtime_object = self._object(endpoint.object)

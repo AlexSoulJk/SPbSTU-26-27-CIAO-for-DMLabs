@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Callable
+from typing import Any, Callable, overload
 
 from .model import State
 from .operations import Operation
@@ -42,6 +42,37 @@ class Action(Behavior):
     """Действие перехода."""
 
     role = "action"
+
+    def __init__(
+        self,
+        function: Callable[..., Any],
+        *,
+        emit: Operation | None = None,
+        emits: tuple[Operation, ...] | None = None,
+    ) -> None:
+        super().__init__(function)
+        self._emit = emit
+        self._emits = emits
+
+    @property
+    def emit(self) -> Operation | None:
+        """Единичная required-команда из формы ``emit=``."""
+
+        return self._emit
+
+    @property
+    def emits(self) -> tuple[Operation, ...] | None:
+        """Кортеж required-команд из формы ``emits=``."""
+
+        return self._emits
+
+    @property
+    def outgoing_commands(self) -> tuple[Operation, ...]:
+        """Возвращает потенциальные required-команды в порядке объявления."""
+
+        if self.emit is not None:
+            return (self.emit,)
+        return self.emits or ()
 
 
 class Transition:
@@ -83,10 +114,73 @@ def guard(function: Callable[..., Any]) -> Guard:
     return Guard(function)
 
 
-def action(function: Callable[..., Any]) -> Action:
-    """Помечает метод как действие перехода."""
+_MISSING = object()
+_ActionDecorator = Callable[[Callable[..., Any]], Action]
 
-    return Action(function)
+
+@overload
+def action(function: Callable[..., Any], /) -> Action: ...
+
+
+@overload
+def action(*, emit: Operation) -> _ActionDecorator: ...
+
+
+@overload
+def action(*, emits: tuple[Operation, ...]) -> _ActionDecorator: ...
+
+
+def action(
+    function: Callable[..., Any] | object = _MISSING,
+    /,
+    *,
+    emit: Operation | object = _MISSING,
+    emits: tuple[Operation, ...] | object = _MISSING,
+) -> Action | _ActionDecorator:
+    """Объявляет действие и его потенциальные required-команды.
+
+    Поддерживаются ровно три формы:
+
+    - ``@action`` — без capability-параметра;
+    - ``@action(emit=command)`` — ожидает в методе параметр ``Emit``;
+    - ``@action(emits=(command, ...))`` — ожидает параметр ``Emits``.
+
+    Точное соответствие аннотации и метаданных проверяет компилятор.
+    """
+
+    has_function = function is not _MISSING
+    has_emit = emit is not _MISSING
+    has_emits = emits is not _MISSING
+
+    if has_function:
+        if has_emit or has_emits:
+            raise TypeError("Для emit/emits используйте параметризованный @action")
+        if not callable(function):
+            raise TypeError("@action может декорировать только callable")
+        return Action(function)
+
+    if not has_emit and not has_emits:
+        raise TypeError("Форма @action() не поддерживается; используйте @action")
+    if has_emit and has_emits:
+        raise TypeError("Аргументы emit и emits взаимоисключаются")
+    if has_emit:
+        if emit is None:
+            raise TypeError("emit должен ссылаться на required-команду")
+
+        def decorate(actual: Callable[..., Any]) -> Action:
+            return Action(actual, emit=emit)  # type: ignore[arg-type]
+
+        return decorate
+
+    if not isinstance(emits, tuple):
+        raise TypeError("emits должен быть непустым кортежем required-команд")
+    if not emits:
+        raise TypeError("Пустой emits=() не поддерживается")
+
+    def decorate(actual: Callable[..., Any]) -> Action:
+        return Action(actual, emits=emits)
+
+    return decorate
 
 
 def transition(

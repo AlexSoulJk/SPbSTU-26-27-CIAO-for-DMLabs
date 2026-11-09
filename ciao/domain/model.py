@@ -39,14 +39,6 @@ class State:
 class RuntimeServices(Protocol):
     """Закрытый мост от декларативного автомата к runtime."""
 
-    def emit(
-        self,
-        ctx: AutomatonContext,
-        operation: Any,
-        *args: Any,
-        **kwargs: Any,
-    ) -> None: ...
-
     def query(
         self,
         ctx: AutomatonContext,
@@ -109,18 +101,6 @@ class Automaton(Generic[ContextT]):
             ):
                 cls._context_type = context_type
                 break
-
-    def emit(
-        self,
-        ctx: ContextT,
-        operation: Any,
-        /,
-        *args: Any,
-        **kwargs: Any,
-    ) -> None:
-        """Публикует требуемую команду через runtime текущего контекста."""
-
-        ctx._ciao_runtime_services().emit(ctx, operation, *args, **kwargs)
 
     def query(
         self,

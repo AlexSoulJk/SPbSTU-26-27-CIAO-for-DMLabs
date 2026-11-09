@@ -14,6 +14,7 @@ from ciao import (
     AutomatonObject,
     Connection,
     ControllerAutomaton,
+    Emit,
     Program,
     Runtime,
     State,
@@ -44,6 +45,7 @@ class SumController(ControllerAutomaton[SumContext]):
     # Управляющие состояния принадлежат описанию автоматного класса.
     idle = State(initial=True)
     running = State()
+    publishing = State()
     done = State(final=True)
 
     # PROVIDED-команды являются событиями переходов.
@@ -59,6 +61,12 @@ class SumController(ControllerAutomaton[SumContext]):
     def reset(self) -> None:
         ...
 
+    @provided_command
+    def draw_completed(self) -> None:
+        """Подтверждает, что представление обработало опубликованный снимок."""
+
+        ...
+
     # REQUIRED-команда будет связана с PROVIDED-командой объекта SumView.
     @required_command
     def draw(
@@ -71,20 +79,20 @@ class SumController(ControllerAutomaton[SumContext]):
         ...
 
     @guard
-    def has_more(self, ctx: SumContext) -> bool:
-        """После текущего элемента в массиве останутся другие элементы."""
+    def has_current(self, ctx: SumContext) -> bool:
+        """Текущий индекс всё ещё указывает на элемент массива."""
 
-        return ctx.index < len(ctx.values) - 1
-
-    @guard
-    def has_last(self, ctx: SumContext) -> bool:
-        """Текущий элемент является последним необработанным элементом."""
-
-        return ctx.index == len(ctx.values) - 1
+        return not self._is_out_of_bounds(ctx)
 
     @guard
     def is_complete(self, ctx: SumContext) -> bool:
-        """Массив пуст либо все его элементы уже обработаны."""
+        """Текущий индекс уже вышел за границу массива."""
+
+        return self._is_out_of_bounds(ctx)
+
+    @staticmethod
+    def _is_out_of_bounds(ctx: SumContext) -> bool:
+        """Задаёт единственное бинарное условие развилки в ``running``."""
 
         return ctx.index >= len(ctx.values)
 
@@ -109,13 +117,11 @@ class SumController(ControllerAutomaton[SumContext]):
     def count_tick(self, ctx: SumContext) -> None:
         ctx.tick_count += 1
 
-    @action
-    def publish_draw(self, ctx: SumContext) -> None:
-        # Automaton.emit не хранит runtime-состояние: явный ctx определяет
-        # объект-источник и буферизует команду до завершения перехода.
-        self.emit(
-            ctx,
-            self.draw,
+    @action(emit=draw)
+    def publish_draw(self, ctx: SumContext, emit: Emit) -> None:
+        # Emit выдан именно этому Action и уже привязан к draw;
+        # runtime перенесёт команду в FIFO лишь после всего перехода.
+        emit(
             values=tuple(ctx.values),
             index=ctx.index,
             total=ctx.total,
@@ -138,28 +144,26 @@ class SumController(ControllerAutomaton[SumContext]):
         target=running,
     )
 
-    on_tick_with_more_elements = transition(
+    on_tick_with_current_element = transition(
         source=running,
         event=tick,
-        guard=has_more,
+        guard=has_current,
         actions=(add_current, count_tick, publish_draw),
-        target=running,
+        target=publishing,
     )
 
-    on_tick_with_last_element = transition(
-        source=running,
-        event=tick,
-        guard=has_last,
-        actions=(add_current, count_tick, publish_draw),
-        target=done,
-    )
-
-    on_tick_with_empty_array = transition(
+    on_tick_when_complete = transition(
         source=running,
         event=tick,
         guard=is_complete,
-        actions=(count_tick, publish_draw),
+        actions=(),
         target=done,
+    )
+
+    on_draw_completed = transition(
+        source=publishing,
+        event=draw_completed,
+        target=running,
     )
 
     on_reset = transition(
@@ -195,6 +199,10 @@ class SumView(ViewAutomaton[ViewContext]):
     ) -> None:
         ...
 
+    @required_command
+    def draw_completed(self) -> None:
+        ...
+
     @action
     def apply_snapshot(
         self,
@@ -209,10 +217,16 @@ class SumView(ViewAutomaton[ViewContext]):
         ctx.total = total
         ctx.tick_count = tick_count
 
+    @action(emit=draw_completed)
+    def notify_draw_completed(self, ctx: ViewContext, emit: Emit) -> None:
+        # Подтверждение возвращает Controller из промежуточного состояния
+        # publishing только после фактической обработки команды draw.
+        emit()
+
     on_draw = transition(
         source=ready,
         event=draw,
-        actions=(apply_snapshot,),
+        actions=(apply_snapshot, notify_draw_completed),
         target=ready,
     )
 
@@ -247,6 +261,10 @@ def build_sample() -> Sample:
                 required=(controller, SumController.draw),
                 provided=(view, SumView.draw),
             ),
+            Connection(
+                required=(view, SumView.draw_completed),
+                provided=(controller, SumController.draw_completed),
+            ),
         ),
     )
     return Sample(program=program, controller=controller, view=view)
@@ -263,7 +281,7 @@ def calculate_sum(values: Sequence[int]) -> tuple[int, ViewContext]:
 
     while runtime.snapshot(sample.controller).state is not SumController.done:
         # tick — пользовательская команда. step() ниже обрабатывает ровно одно
-        # сообщение; run() затем доставляет порождённую команду draw объекту View.
+        # сообщение; run() доставляет draw объекту View и подтверждение обратно.
         runtime.send(sample.controller, SumController.tick)
         runtime.step()
         runtime.run()

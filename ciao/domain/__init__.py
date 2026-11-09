@@ -1,6 +1,7 @@
 """Публичные сущности декларативной модели."""
 
 from .connections import Connection, Endpoint
+from .emission import Emit, Emits
 from .model import (
     Automaton,
     AutomatonContext,
@@ -33,6 +34,8 @@ __all__ = [
     "Connection",
     "ControllerAutomaton",
     "Endpoint",
+    "Emit",
+    "Emits",
     "Guard",
     "Operation",
     "OperationDirection",

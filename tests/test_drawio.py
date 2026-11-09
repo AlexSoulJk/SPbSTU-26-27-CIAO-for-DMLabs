@@ -106,12 +106,12 @@ class DrawioTests(unittest.TestCase):
         ids = [cell.get("id") for cell in cells]
         self.assertEqual(len(ids), len(set(ids)))
         self.assertEqual(2, len(_cells(root, "automaton")))
-        self.assertEqual(4, len(_cells(root, "state")))
+        self.assertEqual(5, len(_cells(root, "state")))
         self.assertEqual(6, len([cell for cell in cells if cell.get("ciaoTransition")]))
         self.assertEqual(1, len(_cells(root, "decision")))
-        self.assertEqual(1, len(_cells(root, "connectionJunction")))
-        self.assertEqual(1, len(_cells(root, "connectionRequired")))
-        self.assertEqual(1, len(_cells(root, "connectionProvided")))
+        self.assertEqual(2, len(_cells(root, "connectionJunction")))
+        self.assertEqual(2, len(_cells(root, "connectionRequired")))
+        self.assertEqual(2, len(_cells(root, "connectionProvided")))
 
         known_ids = set(ids)
         for edge in (cell for cell in cells if cell.get("edge") == "1"):
@@ -193,10 +193,26 @@ class DrawioTests(unittest.TestCase):
         automatons = {
             cell.get("ciaoObject"): cell for cell in _cells(root, "automaton")
         }
-        junction = _cells(root, "connectionJunction")[0]
-        required = _cells(root, "connectionRequired")[0]
-        provided = _cells(root, "connectionProvided")[0]
-        label = _cells(root, "connectionLabel")[0]
+        required = next(
+            cell
+            for cell in _cells(root, "connectionRequired")
+            if cell.get("ciaoOperation") == "draw"
+        )
+        provided = next(
+            cell
+            for cell in _cells(root, "connectionProvided")
+            if cell.get("ciaoOperation") == "draw"
+        )
+        junction = next(
+            cell
+            for cell in _cells(root, "connectionJunction")
+            if cell.get("id") == required.get("target")
+        )
+        label = next(
+            cell
+            for cell in _cells(root, "connectionLabel")
+            if cell.get("value") == "draw"
+        )
 
         self.assertEqual(automatons["controller"].get("id"), required.get("source"))
         self.assertEqual(automatons["view"].get("id"), provided.get("source"))
@@ -214,6 +230,13 @@ class DrawioTests(unittest.TestCase):
             if cell.get("ciaoOperation") == "draw"
         ]
         self.assertEqual([], connected_draw_nodes)
+
+        acknowledgement = next(
+            cell
+            for cell in _cells(root, "connectionLabel")
+            if cell.get("value") == "draw_completed"
+        )
+        self.assertIsNotNone(acknowledgement)
 
     def test_self_connection_halves_leave_block_at_different_points(self) -> None:
         object_ref = AutomatonObject(
@@ -253,16 +276,16 @@ class DrawioTests(unittest.TestCase):
         reset_points = transitions["on_reset"].findall("./mxGeometry/Array/mxPoint")
         self.assertGreaterEqual(len(reset_points), 2)
 
-        done_branches = [
-            transitions["on_tick_with_last_element"],
-            transitions["on_tick_with_empty_array"],
+        tick_branches = [
+            transitions["on_tick_with_current_element"],
+            transitions["on_tick_when_complete"],
         ]
         branch_routes = [
             tuple(
                 (int(point.get("x", "0")), int(point.get("y", "0")))
                 for point in branch.findall("./mxGeometry/Array/mxPoint")
             )
-            for branch in done_branches
+            for branch in tick_branches
         ]
         self.assertNotEqual(branch_routes[0], branch_routes[1])
         self.assertIsNotNone(transitions["on_reset"].find("./mxGeometry/mxPoint[@as='offset']"))

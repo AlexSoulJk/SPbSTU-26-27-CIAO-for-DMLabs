@@ -12,7 +12,7 @@ from ciao import (
     AutomatonContext,
     AutomatonObject,
     Connection,
-    GuardExecutionError,
+    Emit,
     ModelValidationError,
     NoTransitionError,
     Program,
@@ -151,10 +151,10 @@ class FailingSender(Automaton[FailingContext]):
     def notify(self, value: int) -> None:
         ...
 
-    @action
-    def emit_then_fail(self, ctx: FailingContext) -> None:
+    @action(emit=notify)
+    def emit_then_fail(self, ctx: FailingContext, emit: Emit) -> None:
         ctx.changed += 1
-        self.emit(ctx, self.notify, value=ctx.changed)
+        emit(value=ctx.changed)
         raise ValueError("ожидаемая ошибка")
 
     on_start = transition(
@@ -181,9 +181,9 @@ class RenamedSender(Automaton[RenamedSenderContext]):
     def output(self, value: int) -> None:
         ...
 
-    @action
-    def publish(self, ctx: RenamedSenderContext) -> None:
-        self.emit(ctx, self.output, value=91)
+    @action(emit=output)
+    def publish(self, ctx: RenamedSenderContext, emit: Emit) -> None:
+        emit(value=91)
         ctx.sent = True
 
     on_start = transition(
@@ -235,9 +235,9 @@ class GuardEmitter(Automaton[GuardEmitterContext]):
         ...
 
     @guard
-    def invalid_guard(self, ctx: GuardEmitterContext) -> bool:
+    def invalid_guard(self, ctx: GuardEmitterContext, emit: Emit) -> bool:
         ctx.checked = True
-        self.emit(ctx, self.output, value=1)
+        emit(value=1)
         return True
 
     on_start = transition(
@@ -255,6 +255,7 @@ class RuntimeTests(unittest.TestCase):
                 total, view = calculate_sum(values)
                 self.assertEqual(expected, total)
                 self.assertEqual(expected, view.total)
+                self.assertEqual(len(values), view.tick_count)
 
     def test_contexts_are_independent_between_runtimes(self) -> None:
         sample = build_sample()
@@ -281,10 +282,26 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual(StepStatus.PROCESSED, controller_step.status)
         self.assertEqual(1, len(controller_step.emitted))
         self.assertEqual(0, runtime.snapshot(sample.view).total)
+        self.assertIs(
+            SumController.publishing,
+            runtime.snapshot(sample.controller).state,
+        )
 
         view_step = runtime.step()
         self.assertEqual("draw", view_step.operation)
+        self.assertEqual(1, len(view_step.emitted))
         self.assertEqual(3, runtime.snapshot(sample.view).total)
+        self.assertIs(
+            SumController.publishing,
+            runtime.snapshot(sample.controller).state,
+        )
+
+        acknowledgement_step = runtime.step()
+        self.assertEqual("draw_completed", acknowledgement_step.operation)
+        self.assertIs(
+            SumController.running,
+            runtime.snapshot(sample.controller).state,
+        )
 
     def test_snapshot_is_detached_from_runtime_context(self) -> None:
         sample = build_sample()
@@ -408,7 +425,7 @@ class RuntimeTests(unittest.TestCase):
         self.assertTrue(runtime.snapshot(sender).sent)
         self.assertEqual(91, runtime.snapshot(receiver).received)
 
-    def test_emit_is_forbidden_inside_guard(self) -> None:
+    def test_emit_capability_is_forbidden_inside_guard(self) -> None:
         sender = AutomatonObject("sender", GuardEmitter, GuardEmitterContext())
         receiver = AutomatonObject("receiver", Receiver, ReceiverContext())
         program = Program(
@@ -420,11 +437,8 @@ class RuntimeTests(unittest.TestCase):
                 ),
             ),
         )
-        runtime = Runtime(program)
-        runtime.send(sender, GuardEmitter.start)
-        with self.assertRaises(GuardExecutionError):
-            runtime.step()
-        self.assertEqual(0, runtime.pending_messages)
+        with self.assertRaises(ModelValidationError):
+            Runtime(program)
 
     def test_run_raises_on_limit_in_strict_mode(self) -> None:
         sample = build_sample()

@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import fields, is_dataclass
-from inspect import _empty
+from hashlib import blake2s
+from inspect import _empty, signature as inspect_signature
 from types import NoneType, UnionType
 from typing import Any, get_args, get_origin, get_type_hints
 
@@ -12,6 +14,7 @@ from ciao.infrastructure import CompiledProgram, OperationParameter, OperationSi
 
 from .diagram_model import (
     AutomatonView,
+    ActionView,
     ConnectionView,
     ContextField,
     DiagramDescription,
@@ -19,6 +22,20 @@ from .diagram_model import (
     StateView,
     TransitionView,
 )
+
+
+def _normalized_id(value: str) -> str:
+    """Строит draw.io-совместимый ID, устойчивый к порядку деклараций."""
+
+    normalized = re.sub(r"[^0-9A-Za-z_.-]+", "-", value).strip("-.")
+    if not normalized:
+        normalized = "ciao"
+    digest = blake2s(value.encode("utf-8"), digest_size=5).hexdigest()
+    return f"{normalized}--{digest}"
+
+
+def _semantic_id(kind: str, *parts: str) -> str:
+    return _normalized_id(":".join((kind, *parts)))
 
 
 def format_type(annotation: Any) -> str:
@@ -122,16 +139,28 @@ def build_diagram(compiled: CompiledProgram) -> DiagramDescription:
     blocks: list[AutomatonView] = []
     endpoint_ids: dict[tuple[int, Any], str] = {}
 
-    for object_index, object_ref in enumerate(compiled.program.objects):
+    for object_ref in compiled.program.objects:
         definition = compiled.definitions[object_ref.automaton]
-        block_id = f"object-{object_index}"
+        block_id = _semantic_id(
+            "object",
+            object_ref.name,
+            object_ref.automaton.__module__,
+            object_ref.automaton.__qualname__,
+        )
         states = tuple(
-            StateView(f"{block_id}-state-{index}", state)
-            for index, state in enumerate(definition.states)
+            StateView(
+                _semantic_id("state", object_ref.name, state.qualified_name),
+                state,
+            )
+            for state in definition.states
         )
         operations: list[OperationView] = []
-        for operation_index, operation in enumerate(definition.operations):
-            endpoint_id = f"{block_id}-operation-{operation_index}"
+        for operation in definition.operations:
+            endpoint_id = _semantic_id(
+                "operation",
+                object_ref.name,
+                operation.qualified_name,
+            )
             endpoint_ids[(id(object_ref), operation)] = endpoint_id
             signature = definition.operation_signatures[operation]
             operations.append(
@@ -146,9 +175,29 @@ def build_diagram(compiled: CompiledProgram) -> DiagramDescription:
                     label=_operation_label(operation, signature),
                 )
             )
+        actions = tuple(
+            ActionView(
+                id=_semantic_id(
+                    "action",
+                    object_ref.name,
+                    action.qualified_name,
+                ),
+                action=action,
+                signature=str(inspect_signature(action.function)),
+            )
+            for action in definition.actions
+            if not action.outgoing_commands
+        )
         transitions = tuple(
-            TransitionView(f"{block_id}-transition-{index}", transition)
-            for index, transition in enumerate(definition.transitions)
+            TransitionView(
+                _semantic_id(
+                    "transition",
+                    object_ref.name,
+                    transition.qualified_name,
+                ),
+                transition,
+            )
+            for transition in definition.transitions
         )
         blocks.append(
             AutomatonView(
@@ -158,12 +207,13 @@ def build_diagram(compiled: CompiledProgram) -> DiagramDescription:
                 context_fields=_context_fields(definition.context_type),
                 states=states,
                 operations=tuple(operations),
+                actions=actions,
                 transitions=transitions,
             )
         )
 
     connections: list[ConnectionView] = []
-    for index, connection in enumerate(compiled.program.connections):
+    for connection in compiled.program.connections:
         required = connection.required
         provided = connection.provided
         required_signature = compiled.definitions[
@@ -172,7 +222,13 @@ def build_diagram(compiled: CompiledProgram) -> DiagramDescription:
         connection_label = _connection_label(required.operation, required_signature)
         connections.append(
             ConnectionView(
-                id=f"connection-{index}",
+                id=_semantic_id(
+                    "connection",
+                    required.object.name,
+                    required.operation.qualified_name,
+                    provided.object.name,
+                    provided.operation.qualified_name,
+                ),
                 required_endpoint_id=endpoint_ids[
                     (id(required.object), required.operation)
                 ],
@@ -182,6 +238,7 @@ def build_diagram(compiled: CompiledProgram) -> DiagramDescription:
                 # Направления видны по концам связи, поэтому в подписи остаётся
                 # только пользовательская сигнатура без provided/required.
                 label=connection_label,
+                kind=required.operation.kind,
             )
         )
 

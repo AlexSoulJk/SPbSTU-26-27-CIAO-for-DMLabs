@@ -36,6 +36,7 @@ from ciao import (
 from ciao.visualization.drawio import export_program_drawio
 from examples.array_sum.automatos import SumController, SumView
 from examples.array_sum.program import build_sample
+from examples.calculator.program import build_calculator_program
 
 
 def _cells(root: ET.Element, kind: str) -> list[ET.Element]:
@@ -167,7 +168,10 @@ class DrawioTests(unittest.TestCase):
         self.assertEqual(len(ids), len(set(ids)))
         self.assertEqual(2, len(_cells(root, "automaton")))
         self.assertEqual(5, len(_cells(root, "state")))
-        self.assertEqual(6, len([cell for cell in cells if cell.get("ciaoTransition")]))
+        self.assertEqual(1, len(_cells(root, "exit")))
+        self.assertEqual(2, len(_cells(root, "entry")))
+        self.assertEqual(2, len(_cells(root, "entryTransition")))
+        self.assertEqual(7, len([cell for cell in cells if cell.get("ciaoTransition")]))
         self.assertEqual(1, len(_cells(root, "decision")))
         self.assertEqual(2, len(_cells(root, "connectionJunction")))
         self.assertEqual(2, len(_cells(root, "connectionRequired")))
@@ -199,12 +203,18 @@ class DrawioTests(unittest.TestCase):
         self.assertIn("shape=lollipop", start.get("style", ""))
         self.assertIn("direction=south", start.get("style", ""))
         self.assertIn("rotation=-90", start.get("style", ""))
-        self.assertEqual(0, len(_cells(root, "initial")))
-        self.assertEqual(0, len(_cells(root, "initialTransition")))
-        external_link = _cells(root, "externalInterface")
-        self.assertEqual(1, len(external_link))
-        self.assertEqual(start.get("id"), external_link[0].get("source"))
-        self.assertEqual("object-0-state-0", external_link[0].get("target"))
+        entry = next(
+            cell
+            for cell in _cells(root, "entry")
+            if cell.get("ciaoState") == "idle"
+        )
+        entry_transition = next(
+            cell
+            for cell in _cells(root, "entryTransition")
+            if cell.get("ciaoState") == "idle"
+        )
+        self.assertEqual(entry.get("id"), entry_transition.get("source"))
+        self.assertEqual(0, len(_cells(root, "externalInterface")))
 
         start_label = next(
             cell
@@ -218,11 +228,17 @@ class DrawioTests(unittest.TestCase):
             _, root = self._export_sample(directory)
 
         done = next(
-            cell for cell in _cells(root, "state") if cell.get("ciaoState") == "done"
+            cell for cell in _cells(root, "exit") if cell.get("ciaoState") == "done"
         )
         self.assertEqual("true", done.get("ciaoFinal"))
         self.assertIn("shape=endState", done.get("style", ""))
-        self.assertIn("fillColor=#EAF5FD", done.get("style", ""))
+        self.assertIn("fillColor=#000000", done.get("style", ""))
+        done_label = next(
+            cell
+            for cell in _cells(root, "exitLabel")
+            if cell.get("ciaoState") == "done"
+        )
+        self.assertEqual("done", done_label.get("value"))
 
         automatons = {
             cell.get("ciaoObject"): cell for cell in _cells(root, "automaton")
@@ -280,6 +296,8 @@ class DrawioTests(unittest.TestCase):
         self.assertEqual(junction.get("id"), provided.get("target"))
         self.assertIn("endArrow=halfCircle", required.get("style", ""))
         self.assertIn("endArrow=oval", provided.get("style", ""))
+        self.assertIn("edgeStyle=orthogonalEdgeStyle", required.get("style", ""))
+        self.assertIn("edgeStyle=orthogonalEdgeStyle", provided.get("style", ""))
         self.assertEqual("draw", label.get("value"))
         self.assertEqual("draw", required.get("ciaoOperation"))
         self.assertEqual("draw", provided.get("ciaoOperation"))
@@ -317,8 +335,11 @@ class DrawioTests(unittest.TestCase):
             )
             offsets_by_connection.setdefault(connection_id, set()).add(offset)
 
-        self.assertEqual({"0.42"}, offsets_by_connection["connection-0"])
-        self.assertEqual({"0.58"}, offsets_by_connection["connection-1"])
+        self.assertEqual(2, len(offsets_by_connection))
+        self.assertEqual(
+            [{"0.42"}, {"0.58"}],
+            sorted(offsets_by_connection.values(), key=lambda item: next(iter(item))),
+        )
 
     def test_connection_labels_stay_inside_interblock_channel(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -555,14 +576,15 @@ class DrawioTests(unittest.TestCase):
             x, y, width, height = rectangle(cell)
             return x + width / 2, y + height / 2
 
-        def path_midpoint(
+        def point_on_path(
             points: list[tuple[float, float]],
+            fraction: float,
         ) -> tuple[float, float]:
             lengths = [
                 hypot(right[0] - left[0], right[1] - left[1])
                 for left, right in zip(points, points[1:])
             ]
-            remaining = sum(lengths) / 2
+            remaining = sum(lengths) * fraction
             for left, right, length in zip(points, points[1:], lengths):
                 if remaining <= length:
                     ratio = remaining / length if length else 0
@@ -575,7 +597,17 @@ class DrawioTests(unittest.TestCase):
 
         obstacles = [
             rectangle(cell)
-            for kind in ("state", "context", "decision")
+            for kind in (
+                "state",
+                "exit",
+                "exitLabel",
+                "entry",
+                "context",
+                "decision",
+                "actionLabel",
+                "operation",
+                "operationLabel",
+            )
             for cell in _cells(root, kind)
         ]
         placed_labels: list[tuple[int, int, int, int]] = []
@@ -594,7 +626,11 @@ class DrawioTests(unittest.TestCase):
                 for point in geometry.findall("./Array/mxPoint")
             )
             points.append(center(cells_by_id[edge.get("target")]))
-            anchor_x, anchor_y = path_midpoint(points)
+            relative_position = float(geometry.get("x", "0"))
+            anchor_x, anchor_y = point_on_path(
+                points,
+                (relative_position + 1) / 2,
+            )
             offset = geometry.find("mxPoint[@as='offset']")
             width = int(geometry.get("width", "0"))
             height = int(geometry.get("height", "0"))
@@ -616,9 +652,85 @@ class DrawioTests(unittest.TestCase):
                 )
                 self.assertFalse(
                     overlaps,
-                    f"Подпись {edge.get('ciaoTransition')} пересекает узел",
+                    f"Подпись {edge.get('ciaoTransition')} {label_rectangle} "
+                    f"пересекает узел {(node_x, node_y, node_width, node_height)}",
                 )
             placed_labels.append(label_rectangle)
+
+    def test_transition_routes_do_not_cross_unrelated_graph_nodes(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            _, root = self._export_sample(directory)
+
+        cells_by_id = {
+            cell.get("id"): cell for cell in root.findall(".//mxCell")
+        }
+
+        def rectangle(cell: ET.Element) -> tuple[float, float, float, float]:
+            geometry = cell.find("mxGeometry")
+            return tuple(
+                float(geometry.get(attribute, "0"))
+                for attribute in ("x", "y", "width", "height")
+            )
+
+        def center(cell: ET.Element) -> tuple[float, float]:
+            x, y, width, height = rectangle(cell)
+            return x + width / 2, y + height / 2
+
+        graph_nodes = [
+            cell
+            for kind in ("state", "exit", "decision", "entry")
+            for cell in _cells(root, kind)
+        ]
+
+        def segment_intersects(
+            left: tuple[float, float],
+            right: tuple[float, float],
+            node: tuple[float, float, float, float],
+        ) -> bool:
+            x, y, width, height = node
+            if left[0] == right[0]:
+                low, high = sorted((left[1], right[1]))
+                return x < left[0] < x + width and high > y and low < y + height
+            if left[1] == right[1]:
+                low, high = sorted((left[0], right[0]))
+                return y < left[1] < y + height and high > x and low < x + width
+            return False
+
+        for edge in (
+            cell
+            for kind in ("transition", "transitionBranch", "decisionIncoming")
+            for cell in _cells(root, kind)
+        ):
+            geometry = edge.find("mxGeometry")
+            points = [center(cells_by_id[edge.get("source")])]
+            points.extend(
+                (float(point.get("x", "0")), float(point.get("y", "0")))
+                for point in geometry.findall("./Array/mxPoint")
+            )
+            points.append(center(cells_by_id[edge.get("target")]))
+            for node in graph_nodes:
+                if node.get("id") in (edge.get("source"), edge.get("target")):
+                    continue
+                self.assertFalse(
+                    any(
+                        segment_intersects(left, right, rectangle(node))
+                        for left, right in zip(points, points[1:])
+                    ),
+                    f"Переход {edge.get('ciaoTransition')} пересекает "
+                    f"узел {node.get('id')}",
+                )
+
+        decisions_and_exits = _cells(root, "decision") + _cells(root, "exit")
+        for index, first in enumerate(decisions_and_exits):
+            first_x, first_y, first_width, first_height = rectangle(first)
+            for second in decisions_and_exits[index + 1 :]:
+                second_x, second_y, second_width, second_height = rectangle(second)
+                self.assertTrue(
+                    first_x + first_width <= second_x
+                    or second_x + second_width <= first_x
+                    or first_y + first_height <= second_y
+                    or second_y + second_height <= first_y
+                )
 
     def test_context_fields_do_not_expose_values_or_class_name(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -686,9 +798,7 @@ class DrawioTests(unittest.TestCase):
         label = _cells(root, "context")[0].get("value", "")
         self.assertLess(label.index("first: float"), label.index("second: str"))
         self.assertNotIn("transient", label)
-        final_states = [
-            cell for cell in _cells(root, "state") if cell.get("ciaoFinal") == "true"
-        ]
+        final_states = _cells(root, "exit")
         self.assertEqual(2, len(final_states))
 
     def test_query_signature_comes_from_compiled_metadata(self) -> None:
@@ -727,6 +837,261 @@ class DrawioTests(unittest.TestCase):
         query_connection = _cells(root, "connectionRequired")[0]
         self.assertIn("scale: int=1", query_connection.get("ciaoSignature", ""))
         self.assertIn("-> int", query_connection.get("ciaoSignature", ""))
+        self.assertIn("strokeColor=#B85450", query_connection.get("style", ""))
+        query_label = _cells(root, "connectionLabel")[0]
+        self.assertIn("fontColor=#B85450", query_label.get("style", ""))
+
+    def test_unconnected_query_has_red_endpoint_and_query_stereotype(self) -> None:
+        provider = AutomatonObject("provider", QueryProvider, QueryContext())
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "query_endpoint.drawio"
+            export_program_drawio(Program(objects=(provider,)), output)
+            root = ET.parse(output).getroot()
+
+        endpoint = next(
+            cell
+            for cell in _cells(root, "operation")
+            if cell.get("ciaoOperation") == "read"
+        )
+        label = next(
+            cell
+            for cell in _cells(root, "operationLabel")
+            if cell.get("ciaoOperation") == "read"
+        )
+        self.assertIn("strokeColor=#B85450", endpoint.get("style", ""))
+        self.assertEqual("«query»<br>read(scale=1)", label.get("value"))
+        self.assertIn("scale: int=1", endpoint.get("ciaoSignature", ""))
+
+    def test_actions_without_emit_are_compact_bottom_labels(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            _, root = self._export_sample(directory)
+
+        self.assertEqual([], _cells(root, "action"))
+        actions = {
+            cell.get("ciaoAction"): cell
+            for cell in _cells(root, "actionLabel")
+        }
+        self.assertEqual(
+            {"initialize", "add_current", "count_tick", "clear", "apply_snapshot"},
+            set(actions),
+        )
+        self.assertNotIn("publish_draw", actions)
+        self.assertNotIn("notify_draw_completed", actions)
+        self.assertIn("ctx", actions["initialize"].get("ciaoSignature", ""))
+        self.assertEqual(
+            "\ntotal += values[index];\nindex++",
+            actions["add_current"].get("ciaoText"),
+        )
+        self.assertEqual(set(actions), {cell.get("value") for cell in actions.values()})
+
+        blocks = _cells(root, "automaton")
+        block_bottoms = {
+            int(geometry.get("y", "0")) + int(geometry.get("height", "0"))
+            for block in blocks
+            if (geometry := block.find("mxGeometry")) is not None
+        }
+        for action in actions.values():
+            geometry = action.find("mxGeometry")
+            self.assertIn(
+                int(geometry.get("y", "0"))
+                + int(geometry.get("height", "0")),
+                block_bottoms,
+            )
+            expected_width = max(32, len(action.get("value", "")) * 6)
+            self.assertEqual(expected_width, int(geometry.get("width", "0")))
+
+    def test_semantic_ids_survive_object_reordering(self) -> None:
+        sample = build_sample()
+        reordered = Program(
+            objects=tuple(reversed(sample.program.objects)),
+            connections=sample.program.connections,
+        )
+
+        def export_root(program: Program, directory: str, name: str) -> ET.Element:
+            output = Path(directory) / name
+            export_program_drawio(program, output)
+            return ET.parse(output).getroot()
+
+        def semantic_ids(root: ET.Element) -> dict[tuple[str, ...], str]:
+            result: dict[tuple[str, ...], str] = {}
+            for cell in root.findall(".//mxCell"):
+                kind = cell.get("ciaoElement")
+                if kind not in {
+                    "automaton",
+                    "state",
+                    "exit",
+                    "entry",
+                    "action",
+                    "connectionRequired",
+                    "connectionProvided",
+                }:
+                    continue
+                key = (
+                    kind,
+                    cell.get("ciaoObject", ""),
+                    cell.get("ciaoState", ""),
+                    cell.get("ciaoAction", ""),
+                    cell.get("ciaoConnection", ""),
+                    cell.get("ciaoDirection", ""),
+                )
+                result[key] = cell.get("id", "")
+            return result
+
+        with tempfile.TemporaryDirectory() as directory:
+            original_root = export_root(
+                sample.program,
+                directory,
+                "original.drawio",
+            )
+            reordered_root = export_root(
+                reordered,
+                directory,
+                "reordered.drawio",
+            )
+
+        self.assertEqual(
+            semantic_ids(original_root),
+            semantic_ids(reordered_root),
+        )
+
+    def test_block_sizes_are_content_driven_and_keep_program_order(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            _, root = self._export_sample(directory)
+
+        blocks = _cells(root, "automaton")
+        self.assertEqual(
+            ["controller", "view"],
+            [block.get("ciaoObject") for block in blocks],
+        )
+        geometries = [block.find("mxGeometry") for block in blocks]
+        self.assertLess(
+            int(geometries[0].get("x", "0")),
+            int(geometries[1].get("x", "0")),
+        )
+        widths = [int(geometry.get("width", "0")) for geometry in geometries]
+        self.assertTrue(all(width >= 650 for width in widths))
+        # Длинная подпись перехода View учитывается до раскладки и расширяет
+        # рамку сверх минимальной ширины, а не выступает за неё постфактум.
+        self.assertGreater(widths[1], 650)
+
+    def test_three_blocks_keep_order_and_connections_use_reserved_channels(self) -> None:
+        program, _, _, _ = build_calculator_program()
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "calculator.drawio"
+            export_program_drawio(program, output)
+            root = ET.parse(output).getroot()
+
+        blocks = _cells(root, "automaton")
+        self.assertEqual(
+            ["calculator", "operators", "view"],
+            [block.get("ciaoObject") for block in blocks],
+        )
+        block_rectangles = []
+        for block in blocks:
+            geometry = block.find("mxGeometry")
+            block_rectangles.append(
+                (
+                    int(geometry.get("x", "0")),
+                    int(geometry.get("y", "0")),
+                    int(geometry.get("width", "0")),
+                    int(geometry.get("height", "0")),
+                )
+            )
+
+        first_x, first_y, _, first_height = block_rectangles[0]
+        second_x, second_y, _, _ = block_rectangles[1]
+        third_x, third_y, _, _ = block_rectangles[2]
+        self.assertLess(first_x, second_x)
+        self.assertEqual(first_y, second_y)
+        self.assertEqual(first_x, third_x)
+        self.assertGreaterEqual(third_y, first_y + first_height)
+
+        for half in _cells(root, "connectionRequired") + _cells(
+            root,
+            "connectionProvided",
+        ):
+            self.assertIn(
+                "edgeStyle=orthogonalEdgeStyle",
+                half.get("style", ""),
+            )
+
+        for label in _cells(root, "connectionLabel"):
+            geometry = label.find("mxGeometry")
+            label_rectangle = (
+                int(geometry.get("x", "0")),
+                int(geometry.get("y", "0")),
+                int(geometry.get("width", "0")),
+                int(geometry.get("height", "0")),
+            )
+            label_x, label_y, label_width, label_height = label_rectangle
+            for block_x, block_y, block_width, block_height in block_rectangles:
+                overlaps = not (
+                    label_x + label_width <= block_x
+                    or block_x + block_width <= label_x
+                    or label_y + label_height <= block_y
+                    or block_y + block_height <= label_y
+                )
+                self.assertFalse(
+                    overlaps,
+                    f"Подпись connection {label.get('value')} зашла на блок",
+                )
+
+    def test_initial_final_state_combines_entry_with_exit(self) -> None:
+        object_ref = AutomatonObject("plain", PlainAutomaton, PlainContext())
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "initial_final.drawio"
+            export_program_drawio(Program(objects=(object_ref,)), output)
+            root = ET.parse(output).getroot()
+
+        initial_exit = next(
+            cell
+            for cell in _cells(root, "exit")
+            if cell.get("ciaoInitial") == "true"
+        )
+        entry_edge = next(
+            cell
+            for cell in _cells(root, "entryTransition")
+            if cell.get("ciaoState") == "only"
+        )
+        self.assertEqual(initial_exit.get("id"), entry_edge.get("target"))
+
+    def test_outgoing_transition_from_final_state_is_preserved(self) -> None:
+        class FinalOutgoingAutomaton(Automaton[QueryContext]):
+            terminal = State(initial=True, final=True)
+            resumed = State()
+
+            @provided_command
+            def resume(self) -> None:
+                ...
+
+            on_resume = transition(
+                source=terminal,
+                event=resume,
+                target=resumed,
+            )
+
+        object_ref = AutomatonObject(
+            "final_outgoing",
+            FinalOutgoingAutomaton,
+            QueryContext(),
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "final_outgoing.drawio"
+            export_program_drawio(Program(objects=(object_ref,)), output)
+            root = ET.parse(output).getroot()
+
+        terminal = next(
+            cell
+            for cell in _cells(root, "exit")
+            if cell.get("ciaoState") == "terminal"
+        )
+        transition_cell = next(
+            cell
+            for cell in root.findall(".//mxCell")
+            if cell.get("ciaoTransition") == "on_resume"
+        )
+        self.assertEqual(terminal.get("id"), transition_cell.get("source"))
+        self.assertNotEqual(terminal.get("id"), transition_cell.get("target"))
 
     def test_export_is_deterministic_and_replaces_existing_file(self) -> None:
         sample = build_sample()
@@ -782,10 +1147,21 @@ class DrawioTests(unittest.TestCase):
         runtime.run()
         runtime.send(sample.controller, SumController.tick)
         runtime.run()
-        self.assertIs(SumController.done, runtime.snapshot(sample.controller).state)
+        self.assertIs(
+            SumController.completed,
+            runtime.snapshot(sample.controller).state,
+        )
         runtime.send(sample.controller, SumController.reset)
         runtime.run()
         self.assertIs(SumController.idle, runtime.snapshot(sample.controller).state)
+
+        runtime.send(sample.controller, SumController.start, values=[])
+        runtime.run()
+        runtime.send(sample.controller, SumController.tick)
+        runtime.run()
+        runtime.send(sample.controller, SumController.tick)
+        runtime.run()
+        self.assertIs(SumController.done, runtime.snapshot(sample.controller).state)
 
     def test_role_cannot_be_reassigned_on_plain_automaton(self) -> None:
         class InvalidRole(Automaton[QueryContext]):

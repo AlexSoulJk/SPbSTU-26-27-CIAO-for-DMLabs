@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import re
 from collections import Counter, defaultdict
+from dataclasses import dataclass
 from html import escape, unescape
-from math import ceil, hypot
+from math import ceil, hypot, sqrt
 
-from ciao.domain import OperationDirection
+from ciao.domain import OperationDirection, OperationKind
 
 from . import styles
 from .builder import format_type
@@ -22,18 +23,55 @@ from .diagram_model import (
 )
 
 
-BLOCK_WIDTH = 780
 BLOCK_GAP_X = 360
 BLOCK_GAP_Y = 160
 PAGE_MARGIN_X = 180
 PAGE_MARGIN_Y = 100
-BLOCKS_PER_ROW = 2
 ENDPOINT_SIZE = 32
 CONNECTION_LANE_GAP = 80
 CONNECTION_EXIT_STEP = 0.16
 LABEL_GAP = 10
 LABEL_CHAR_WIDTH = 8
 LABEL_LINE_HEIGHT = 18
+STATE_WIDTH = 120
+STATE_HEIGHT = 54
+STATE_GAP_X = 35
+STATE_ROW_STEP = 145
+MAX_STATE_COLUMNS = 4
+CONTEXT_WIDTH = 225
+CONTEXT_MAX_WIDTH = 360
+GRAPH_LEFT_GAP = 50
+GRAPH_RIGHT_MARGIN = 20
+STATE_AREA_OFFSET_X = 15
+BOTTOM_MARGIN_X = 20
+BOTTOM_ITEM_GAP = 18
+BOTTOM_ICON_LABEL_GAP = 6
+ACTION_INTERFACE_WIDTH = 16
+ACTION_INTERFACE_HEIGHT = 24
+ACTION_INTERFACE_ANCHOR_SIZE = 2
+BOTTOM_LABEL_HEIGHT = 24
+COMPACT_CHAR_WIDTH = 6
+DECISION_SIZE = 40
+DECISION_CLEARANCE = 60
+
+
+@dataclass(frozen=True)
+class _BlockMeasurements:
+    """Результат первой фазы layout: весь текст измерен до координат."""
+
+    width: int
+    height: int
+    context_label: str
+    context_width: int
+    context_height: int
+    state_columns: int
+    nonfinal_rows: int
+    final_rows: int
+    transition_labels: dict[str, str]
+    transition_details: dict[str, str]
+    transition_sizes: dict[str, tuple[int, int]]
+    action_sizes: dict[str, tuple[int, int]]
+    operation_sizes: dict[str, tuple[int, int]]
 
 
 def _center(rectangle: Rect) -> Point:
@@ -78,9 +116,14 @@ def _query_labels(
 ) -> tuple[str, ...]:
     """Формирует явный блок потенциальных синхронных запросов."""
 
+    color = styles.QUERY_STROKE
     return (
-        "&lt;&lt;Query&gt;&gt;:",
-        *(operation_labels[query] for query in queries),
+        f'<span style="font-size: 10px; color: {color};">'
+        "&lt;&lt;Query&gt;&gt;:</span>",
+        *(
+            f'<span style="color: {color};">{operation_labels[query]}</span>'
+            for query in queries
+        ),
     )
 
 
@@ -123,6 +166,14 @@ def _label_dimensions(label: str) -> tuple[int, int]:
     return width, height
 
 
+def _compact_label_dimensions(label: str) -> tuple[int, int]:
+    """Измеряет короткую подпись порта без запаса для edge-label."""
+
+    lines = _plain_label_lines(label)
+    width = max(32, max(len(line) for line in lines) * COMPACT_CHAR_WIDTH)
+    return width, max(BOTTOM_LABEL_HEIGHT, len(lines) * 18 + 6)
+
+
 def _rectangles_intersect(first: Rect, second: Rect, *, margin: int = 5) -> bool:
     return not (
         first.x + first.width + margin <= second.x
@@ -132,24 +183,36 @@ def _rectangles_intersect(first: Rect, second: Rect, *, margin: int = 5) -> bool
     )
 
 
-def _polyline_midpoint(points: tuple[Point, ...]) -> Point:
-    lengths = [
-        hypot(right.x - left.x, right.y - left.y)
-        for left, right in zip(points, points[1:])
-    ]
-    total = sum(lengths)
-    if total == 0:
-        return points[0]
-    remaining = total / 2
-    for left, right, length in zip(points, points[1:], lengths):
-        if remaining <= length:
-            ratio = remaining / length if length else 0
-            return Point(
+def _label_anchors(points: tuple[Point, ...]) -> tuple[tuple[Point, float], ...]:
+    """Даёт кандидаты сначала на самых длинных участках стрелки."""
+
+    raw_segments: list[tuple[float, float, Point, Point]] = []
+    distance = 0.0
+    for left, right in zip(points, points[1:]):
+        length = hypot(right.x - left.x, right.y - left.y)
+        raw_segments.append((length, distance, left, right))
+        distance += length
+    total = distance
+    segments = sorted(
+        raw_segments,
+        key=lambda item: item[0],
+        reverse=True,
+    )
+    anchors: list[tuple[Point, float]] = []
+    for length, start_distance, left, right in segments:
+        for ratio in (0.5, 0.35, 0.65, 0.2, 0.8):
+            candidate = Point(
                 round(left.x + (right.x - left.x) * ratio),
                 round(left.y + (right.y - left.y) * ratio),
             )
-        remaining -= length
-    return points[-1]
+            position = (
+                round(2 * ((start_distance + length * ratio) / total) - 1, 4)
+                if total
+                else 0.0
+            )
+            if not any(item[0] == candidate for item in anchors):
+                anchors.append((candidate, position))
+    return tuple(anchors) or ((points[0], 0.0),)
 
 
 def _label_offset(
@@ -192,60 +255,71 @@ def _place_edge_label(
     preferred_sides: tuple[str, ...],
     obstacles: list[Rect],
     bounds: Rect,
-) -> tuple[Point, int, int]:
+) -> tuple[float, Point, int, int]:
     """Находит ближайшую свободную сторону и резервирует место подписи."""
 
     width, height = _label_dimensions(label)
     path = (_center(source), *points, _center(target))
-    anchor = _polyline_midpoint(path)
-    fallback: tuple[tuple[int, int, int, int], Point, Rect] | None = None
+    anchors = _label_anchors(path)
+    fallback: (
+        tuple[tuple[int, int, int, int, int], float, Point, Rect] | None
+    ) = None
 
     for extra_gap in (0, 8, 16, 28, 44):
-        for side_index, side in enumerate(preferred_sides):
-            offset = _label_offset(
-                side,
-                width,
-                height,
-                extra_gap=extra_gap,
-            )
-            rectangle = _label_rectangle(anchor, offset, width, height)
-            intersections = sum(
-                _rectangles_intersect(rectangle, obstacle)
-                for obstacle in obstacles
-            )
-            outside = (
-                max(0, bounds.x + 6 - rectangle.x)
-                + max(0, bounds.y + 6 - rectangle.y)
-                + max(
-                    0,
-                    rectangle.x
-                    + rectangle.width
-                    - (bounds.x + bounds.width - 6),
+        for anchor_index, (anchor, position) in enumerate(anchors):
+            for side_index, side in enumerate(preferred_sides):
+                offset = _label_offset(
+                    side,
+                    width,
+                    height,
+                    extra_gap=extra_gap,
                 )
-                + max(
-                    0,
-                    rectangle.y
-                    + rectangle.height
-                    - (bounds.y + bounds.height - 6),
+                rectangle = _label_rectangle(anchor, offset, width, height)
+                intersections = sum(
+                    _rectangles_intersect(rectangle, obstacle)
+                    for obstacle in obstacles
                 )
-            )
-            score = (intersections, outside, extra_gap, side_index)
-            if fallback is None or score < fallback[0]:
-                fallback = (score, offset, rectangle)
-            inside = (
-                rectangle.x >= bounds.x + 6
-                and rectangle.y >= bounds.y + 6
-                and rectangle.x + rectangle.width <= bounds.x + bounds.width - 6
-                and rectangle.y + rectangle.height <= bounds.y + bounds.height - 6
-            )
-            if inside and intersections == 0:
-                obstacles.append(rectangle)
-                return offset, width, height
+                outside = (
+                    max(0, bounds.x + 6 - rectangle.x)
+                    + max(0, bounds.y + 6 - rectangle.y)
+                    + max(
+                        0,
+                        rectangle.x
+                        + rectangle.width
+                        - (bounds.x + bounds.width - 6),
+                    )
+                    + max(
+                        0,
+                        rectangle.y
+                        + rectangle.height
+                        - (bounds.y + bounds.height - 6),
+                    )
+                )
+                score = (
+                    intersections,
+                    outside,
+                    extra_gap,
+                    anchor_index,
+                    side_index,
+                )
+                if fallback is None or score < fallback[0]:
+                    fallback = (score, position, offset, rectangle)
+                inside = (
+                    rectangle.x >= bounds.x + 6
+                    and rectangle.y >= bounds.y + 6
+                    and rectangle.x + rectangle.width
+                    <= bounds.x + bounds.width - 6
+                    and rectangle.y + rectangle.height
+                    <= bounds.y + bounds.height - 6
+                )
+                if inside and intersections == 0:
+                    obstacles.append(rectangle)
+                    return position, offset, width, height
 
     assert fallback is not None
-    _, offset, rectangle = fallback
+    _, position, offset, rectangle = fallback
     obstacles.append(rectangle)
-    return offset, width, height
+    return position, offset, width, height
 
 
 def _transition_details(
@@ -333,6 +407,17 @@ def _route_transition(
         source.height, target.height
     )
     if same_row and source_index < target_index:
+        if target.width <= 40:
+            # Короткий вход в Exit разводим снизу: над ним находится строка
+            # предыдущих State, а нижняя полоса остаётся свободной до Action.
+            route_y = max(
+                source.y + source.height,
+                target.y + target.height,
+            ) + 62 + lane * 24
+            return (
+                Point(source_center.x, route_y),
+                Point(target_center.x, route_y),
+            )
         return ()
     if same_row:
         route_y = min(source.y, target.y) - 48 - lane * 24
@@ -347,46 +432,353 @@ def _route_transition(
     return (Point(source_center.x, middle_y), Point(target_center.x, middle_y))
 
 
-def _block_height(block: AutomatonView) -> int:
-    state_rows = max(1, ceil(len(block.states) / 3))
-    context_height = max(70, 34 + 20 * len(block.context_fields))
-    return max(520, context_height + 130, 230 + state_rows * 145)
+def _segment_intersects_rectangle(
+    left: Point,
+    right: Point,
+    rectangle: Rect,
+    *,
+    margin: int = 8,
+) -> bool:
+    expanded = Rect(
+        rectangle.x - margin,
+        rectangle.y - margin,
+        rectangle.width + 2 * margin,
+        rectangle.height + 2 * margin,
+    )
+    if left.x == right.x:
+        low, high = sorted((left.y, right.y))
+        return (
+            expanded.x <= left.x <= expanded.x + expanded.width
+            and high >= expanded.y
+            and low <= expanded.y + expanded.height
+        )
+    if left.y == right.y:
+        low, high = sorted((left.x, right.x))
+        return (
+            expanded.y <= left.y <= expanded.y + expanded.height
+            and high >= expanded.x
+            and low <= expanded.x + expanded.width
+        )
+    return False
+
+
+def _collinear_overlap(
+    first_left: Point,
+    first_right: Point,
+    second_left: Point,
+    second_right: Point,
+) -> int:
+    if (
+        first_left.y == first_right.y == second_left.y == second_right.y
+    ):
+        first_min, first_max = sorted((first_left.x, first_right.x))
+        second_min, second_max = sorted((second_left.x, second_right.x))
+    elif (
+        first_left.x == first_right.x == second_left.x == second_right.x
+    ):
+        first_min, first_max = sorted((first_left.y, first_right.y))
+        second_min, second_max = sorted((second_left.y, second_right.y))
+    else:
+        return 0
+    return max(0, min(first_max, second_max) - max(first_min, second_min))
+
+
+def _safe_transition_route(
+    source: Rect,
+    target: Rect,
+    *,
+    source_index: int,
+    target_index: int,
+    lane: int,
+    label_width: int,
+    obstacles: list[Rect],
+    reserved_paths: list[tuple[Point, ...]],
+) -> tuple[Point, ...]:
+    """Выбирает ортогональный маршрут по узлам, длине подписи и занятым полосам."""
+
+    source_center = _center(source)
+    target_center = _center(target)
+    base = _route_transition(
+        source,
+        target,
+        source_index=source_index,
+        target_index=target_index,
+        lane=lane,
+    )
+    top_y = min(source.y, target.y) - 48 - lane * 24
+    bottom_y = max(
+        source.y + source.height,
+        target.y + target.height,
+    ) + 48 + lane * 24
+    left_x = min(source.x, target.x) - 48 - lane * 24
+    right_x = max(
+        source.x + source.width,
+        target.x + target.width,
+    ) + 48 + lane * 24
+    candidates = (
+        base,
+        (Point(source_center.x, top_y), Point(target_center.x, top_y)),
+        (Point(source_center.x, bottom_y), Point(target_center.x, bottom_y)),
+        (Point(left_x, source_center.y), Point(left_x, target_center.y)),
+        (Point(right_x, source_center.y), Point(right_x, target_center.y)),
+    )
+    unique_candidates = tuple(dict.fromkeys(candidates))
+    relevant_obstacles = [
+        obstacle for obstacle in obstacles if obstacle not in (source, target)
+    ]
+    desired_segment = min(180, max(90, round(label_width * 0.55)))
+
+    def score(points: tuple[Point, ...]) -> tuple[int, int, int, float]:
+        path = (source_center, *points, target_center)
+        segments = tuple(zip(path, path[1:]))
+        intersections = sum(
+            _segment_intersects_rectangle(left, right, obstacle)
+            for left, right in segments
+            for obstacle in relevant_obstacles
+        )
+        overlap = sum(
+            _collinear_overlap(left, right, used_left, used_right)
+            for left, right in segments
+            for used_path in reserved_paths
+            for used_left, used_right in zip(used_path, used_path[1:])
+        )
+        longest = max(
+            (hypot(right.x - left.x, right.y - left.y) for left, right in segments),
+            default=0,
+        )
+        shortfall = max(0, desired_segment - round(longest))
+        total = sum(
+            hypot(right.x - left.x, right.y - left.y)
+            for left, right in segments
+        )
+        return intersections, overlap, shortfall, total
+
+    selected = min(unique_candidates, key=score)
+    reserved_paths.append((source_center, *selected, target_center))
+    return selected
+
+
+def _state_columns(block: AutomatonView) -> int:
+    return min(MAX_STATE_COLUMNS, max(1, ceil(sqrt(len(block.states)))))
+
+
+def _visible_actions(block: AutomatonView) -> tuple[object, ...]:
+    return tuple(
+        action_view
+        for action_view in block.actions
+        if not action_view.action.outgoing_commands
+    )
+
+
+def _round_up(value: int, step: int) -> int:
+    return ceil(value / step) * step
+
+
+def _context_card(block: AutomatonView) -> tuple[str, int, int]:
+    """Измеряет единую карточку имени объекта и полей контекста."""
+
+    plain_title = f"{block.object_ref.name} : {block.object_ref.automaton.__name__}"
+    title = escape(plain_title)
+    label = (
+        '<div><span style="font-family: Helvetica; font-weight: 700; '
+        f'text-align: center;">{title}</span></div>Поля контекста'
+    )
+    if block.context_fields:
+        label += "<br>" + "<br>".join(
+            f"{escape(item.name)}: {escape(format_type(item.annotation))}"
+            for item in block.context_fields
+        )
+    else:
+        label += "<br>(нет объявленных полей)"
+    plain_lines = [
+        plain_title,
+        "Поля контекста",
+        *(
+            f"{item.name}: {format_type(item.annotation)}"
+            for item in block.context_fields
+        ),
+    ]
+    if not block.context_fields:
+        plain_lines.append("(нет объявленных полей)")
+    measured_width = max(len(line) for line in plain_lines) * LABEL_CHAR_WIDTH + 18
+    width = _round_up(
+        min(CONTEXT_MAX_WIDTH, max(CONTEXT_WIDTH, measured_width)),
+        5,
+    )
+    characters_per_line = max(1, (width - 18) // LABEL_CHAR_WIDTH)
+    visual_rows = sum(
+        max(1, ceil(len(line) / characters_per_line)) for line in plain_lines
+    )
+    height = max(70, visual_rows * 20 - 6)
+    return label, width, height
+
+
+def _measure_block(
+    block: AutomatonView,
+    connected_operation_ids: set[str],
+) -> _BlockMeasurements:
+    """Измеряет подписи и только после этого определяет размер блока."""
+
+    operation_labels = {
+        operation_view.operation: _operation_call_label(operation_view)
+        for operation_view in block.operations
+    }
+    transition_labels = {
+        item.id: _transition_label(item.transition, operation_labels)
+        for item in block.transitions
+    }
+    transition_details = {
+        item.id: _transition_details(item.transition, operation_labels)
+        for item in block.transitions
+    }
+    transition_sizes = {
+        item_id: _label_dimensions(label)
+        for item_id, label in transition_labels.items()
+    }
+    action_sizes = {
+        action_view.id: _compact_label_dimensions(action_view.action.name)
+        for action_view in _visible_actions(block)
+    }
+    operation_sizes = {
+        operation_view.id: (
+            (
+                max(
+                    32,
+                    max(
+                        len(line)
+                        for line in _plain_label_lines(
+                            _visible_operation_label(operation_view)
+                        )
+                    )
+                    * LABEL_CHAR_WIDTH,
+                ),
+                42,
+            )
+            if operation_view.operation.external
+            else _compact_label_dimensions(
+                _visible_operation_label(operation_view)
+            )
+        )
+        for operation_view in block.operations
+    }
+
+    context_label, context_width, context_height = _context_card(block)
+    state_columns = _state_columns(block)
+    nonfinal_count = sum(not item.state.final for item in block.states)
+    final_count = len(block.states) - nonfinal_count
+    nonfinal_rows = ceil(nonfinal_count / state_columns) if nonfinal_count else 0
+    final_rows = ceil(final_count / state_columns) if final_count else 0
+    state_rows = max(1, nonfinal_rows + final_rows)
+    state_area_width = (
+        state_columns * STATE_WIDTH
+        + max(0, state_columns - 1) * STATE_GAP_X
+    )
+    largest_transition_width = max(
+        (size[0] for size in transition_sizes.values()),
+        default=0,
+    )
+    graph_width = max(
+        state_area_width,
+        largest_transition_width + 2 * STATE_WIDTH,
+    )
+
+    bottom_operations = [
+        item
+        for item in block.operations
+        if not item.operation.external
+        and item.id not in connected_operation_ids
+    ]
+    # Нижняя граница строится как детерминированный «забор»: сначала UML-
+    # символ, затем его подпись. ELK эту полосу не компонует, поэтому тот же
+    # порядок и те же зазоры сохраняются во всех стратегиях раскладки.
+    fence_widths = [
+        ACTION_INTERFACE_WIDTH + BOTTOM_ICON_LABEL_GAP + size[0]
+        for size in action_sizes.values()
+    ]
+    fence_widths.extend(
+        ENDPOINT_SIZE
+        + BOTTOM_ICON_LABEL_GAP
+        + operation_sizes[operation_view.id][0]
+        for operation_view in bottom_operations
+    )
+    bottom_width = sum(fence_widths)
+    bottom_width += max(0, len(fence_widths) - 1) * BOTTOM_ITEM_GAP
+
+    width = _round_up(
+        max(
+            650,
+            context_width
+            + GRAPH_LEFT_GAP
+            + graph_width
+            + GRAPH_RIGHT_MARGIN,
+            2 * BOTTOM_MARGIN_X + bottom_width,
+        ),
+        5,
+    )
+    graph_bottom = 112 + (state_rows - 1) * STATE_ROW_STEP + STATE_HEIGHT
+    height = _round_up(
+        max(
+            520,
+            context_height + 130,
+            graph_bottom + 154,
+        ),
+        20,
+    )
+    return _BlockMeasurements(
+        width=width,
+        height=height,
+        context_label=context_label,
+        context_width=context_width,
+        context_height=context_height,
+        state_columns=state_columns,
+        nonfinal_rows=nonfinal_rows,
+        final_rows=final_rows,
+        transition_labels=transition_labels,
+        transition_details=transition_details,
+        transition_sizes=transition_sizes,
+        action_sizes=action_sizes,
+        operation_sizes=operation_sizes,
+    )
 
 
 def _visible_operation_label(operation_view: object) -> str:
-    return getattr(operation_view, "signature_label")
+    label = getattr(operation_view, "signature_label")
+    operation = getattr(operation_view, "operation")
+    if operation.kind is OperationKind.QUERY:
+        return f"«query»<br>{label}"
+    return label
 
 
 def _operation_label_geometry(
     operation_geometry: Rect,
     side: str,
-    label: str,
+    size: tuple[int, int],
 ) -> Rect:
+    width, height = size
     if side == "external":
-        width = max(32, min(220, len(label) * 8))
         return Rect(
             operation_geometry.x - width // 2 - 4,
             operation_geometry.y - 1,
             width,
-            42,
+            height,
         )
     if side == "bottom":
-        width = max(25, min(220, len(label) * 8))
         return Rect(
-            operation_geometry.x - width // 2 - 6,
-            operation_geometry.y - 10,
+            operation_geometry.x - width + 4,
+            operation_geometry.y + ENDPOINT_SIZE - height,
             width,
-            42,
+            height,
         )
-    return Rect(operation_geometry.x + 46, operation_geometry.y - 5, 190, 42)
+    return Rect(operation_geometry.x + 46, operation_geometry.y - 5, width, height)
 
 
 def _layout_block(
     block: AutomatonView,
     block_geometry: Rect,
     connected_operation_ids: set[str],
+    measurements: _BlockMeasurements,
 ) -> tuple[list[NodeCell], list[EdgeCell], dict[str, Rect]]:
-    """Первая стадия: рассчитывает содержимое одного автомата."""
+    """Размещает измеренный блок: граф, нижнюю рамку и внешние порты."""
 
     nodes: list[NodeCell] = []
     edges: list[EdgeCell] = []
@@ -410,71 +802,73 @@ def _layout_block(
         )
     )
 
-    context_height = max(70, 34 + 20 * len(block.context_fields))
-    title = f"{block.object_ref.name} : {block.object_ref.automaton.__name__}"
-    context_label = (
-        '<div><span style="font-family: Helvetica; font-weight: 700; '
-        f'text-align: center;">{title}</span></div>Поля контекста'
-    )
-    if block.context_fields:
-        context_label += "<br>" + "<br>".join(
-            f"{item.name}: {format_type(item.annotation)}"
-            for item in block.context_fields
-        )
-    else:
-        context_label += "<br>(нет объявленных полей)"
     context_geometry = Rect(
         block_geometry.x,
         block_geometry.y,
-        225,
-        context_height,
+        measurements.context_width,
+        measurements.context_height,
     )
     nodes.append(
         NodeCell(
             id=f"{block.id}-context",
-            label=context_label,
+            label=measurements.context_label,
             style=styles.CONTEXT_STYLES[block.role],
             geometry=context_geometry,
             kind="context",
         )
     )
 
+    grouped: dict[tuple[object, object], list[object]] = defaultdict(list)
+    for transition_view in block.transitions:
+        transition = transition_view.transition
+        grouped[(transition.source, transition.event)].append(transition_view)
+
     state_geometries: dict[object, Rect] = {}
-    state_ids: dict[object, str] = {}
-    state_indexes: dict[object, int] = {}
-    state_start_x = block_geometry.x + 290
+    state_ids = {item.state: item.id for item in block.states}
+    state_indexes = {
+        item.state: index for index, item in enumerate(block.states)
+    }
+    state_obstacles: list[Rect] = []
+    state_start_x = (
+        block_geometry.x
+        + measurements.context_width
+        + GRAPH_LEFT_GAP
+        + STATE_AREA_OFFSET_X
+    )
     state_start_y = block_geometry.y + 112
+    state_columns = measurements.state_columns
+    state_area_width = (
+        state_columns * STATE_WIDTH
+        + max(0, state_columns - 1) * STATE_GAP_X
+    )
     has_external_operation = any(
         operation_view.operation.external for operation_view in block.operations
     )
-    for index, state_view in enumerate(block.states):
-        column = index % 3
-        row = index // 3
-        state_x = state_start_x + column * 155
+    nonfinal_states = [item for item in block.states if not item.state.final]
+    final_states = [item for item in block.states if item.state.final]
+
+    for index, state_view in enumerate(nonfinal_states):
+        column = index % state_columns
+        row = index // state_columns
+        state_x = state_start_x + column * (STATE_WIDTH + STATE_GAP_X)
         if state_view.state.initial and has_external_operation:
-            # Внешний lollipop входит сверху в начальное состояние, поэтому
-            # оно немного сдвигается влево, не ломая сетку остальных состояний.
-            state_x -= 40
-        geometry = Rect(
+            # Entry и внешний provided-интерфейс образуют отдельную входную
+            # колонку, поэтому initial State слегка смещается к ним.
+            state_x -= STATE_AREA_OFFSET_X
+        slot_geometry = Rect(
             state_x,
-            state_start_y + row * 145,
-            120,
-            54,
+            state_start_y + row * STATE_ROW_STEP,
+            STATE_WIDTH,
+            STATE_HEIGHT,
         )
+        geometry = slot_geometry
         state_geometries[state_view.state] = geometry
-        state_ids[state_view.state] = state_view.id
-        state_indexes[state_view.state] = index
         geometries[state_view.id] = geometry
-        style = (
-            styles.FINAL_STATE_STYLES[block.role]
-            if state_view.state.final
-            else styles.STATE_STYLES[block.role]
-        )
         nodes.append(
             NodeCell(
                 id=state_view.id,
                 label=state_view.state.name,
-                style=style,
+                style=styles.STATE_STYLES[block.role],
                 geometry=geometry,
                 kind="state",
                 metadata=(
@@ -484,6 +878,156 @@ def _layout_block(
                 ),
             )
         )
+        state_obstacles.append(geometry)
+
+    decision_geometries: dict[tuple[object, object], Rect] = {}
+    decision_index = 0
+    for (source, event), transition_views in grouped.items():
+        if len(transition_views) <= 1 or source not in state_geometries:
+            continue
+        source_geometry = state_geometries[source]
+        geometry = Rect(
+            _center(source_geometry).x - DECISION_SIZE // 2
+            + decision_index * 42,
+            source_geometry.y + source_geometry.height + 78
+            + decision_index * 18,
+            DECISION_SIZE,
+            DECISION_SIZE,
+        )
+        while any(
+            _rectangles_intersect(geometry, obstacle, margin=12)
+            for obstacle in state_obstacles
+        ):
+            geometry = Rect(
+                geometry.x,
+                geometry.y + DECISION_SIZE + 24,
+                geometry.width,
+                geometry.height,
+            )
+        decision_geometries[(source, event)] = geometry
+        decision_index += 1
+
+    final_row_start = measurements.nonfinal_rows
+    graph_center_x = state_start_x + state_area_width // 2
+    decision_clear_x = max(
+        (
+            geometry.x + geometry.width + DECISION_CLEARANCE
+            for geometry in decision_geometries.values()
+        ),
+        default=graph_center_x,
+    )
+    final_base_center_x = max(graph_center_x, decision_clear_x)
+    for index, state_view in enumerate(final_states):
+        row = final_row_start + index // state_columns
+        position_in_row = index % state_columns
+        count_in_row = min(
+            state_columns,
+            len(final_states) - (index // state_columns) * state_columns,
+        )
+        center_x = (
+            final_base_center_x
+            + round(
+                (position_in_row - (count_in_row - 1) / 2)
+                * (STATE_WIDTH + STATE_GAP_X)
+            )
+        )
+        slot_y = state_start_y + row * STATE_ROW_STEP
+        geometry = Rect(center_x - 15, slot_y - 2, 30, 30)
+        label_geometry = Rect(center_x - 60, slot_y - 26, 120, 24)
+        if state_view.state.initial:
+            # Для initial+final подпись уходит вниз, освобождая место Entry.
+            label_geometry = Rect(center_x - 60, slot_y + 30, 120, 24)
+        state_geometries[state_view.state] = geometry
+        geometries[state_view.id] = geometry
+        nodes.append(
+            NodeCell(
+                id=state_view.id,
+                label="",
+                style=styles.EXIT,
+                geometry=geometry,
+                kind="exit",
+                metadata=(
+                    ("ciaoState", state_view.state.name),
+                    ("ciaoInitial", str(state_view.state.initial).lower()),
+                    ("ciaoFinal", "true"),
+                ),
+            )
+        )
+        nodes.append(
+            NodeCell(
+                id=f"{state_view.id}-label",
+                label=state_view.state.name,
+                style=styles.STATE_LABEL,
+                geometry=label_geometry,
+                kind="exitLabel",
+                metadata=(("ciaoState", state_view.state.name),),
+            )
+        )
+        state_obstacles.extend((geometry, label_geometry))
+
+    # Редкий случай Decision с final-source рассчитывается после Exit.
+    for (source, event), transition_views in grouped.items():
+        if len(transition_views) <= 1 or (source, event) in decision_geometries:
+            continue
+        source_geometry = state_geometries[source]
+        geometry = Rect(
+            _center(source_geometry).x - DECISION_SIZE // 2,
+            source_geometry.y + source_geometry.height + 78,
+            DECISION_SIZE,
+            DECISION_SIZE,
+        )
+        decision_geometries[(source, event)] = geometry
+
+    for (source, event), geometry in decision_geometries.items():
+        decision_id = (
+            f"{block.id}-decision-{source.qualified_name}-{event.qualified_name}"
+        )
+        geometries[decision_id] = geometry
+        state_obstacles.append(geometry)
+        nodes.append(
+            NodeCell(
+                id=decision_id,
+                label="",
+                style=styles.DECISION,
+                geometry=geometry,
+                kind="decision",
+                metadata=(("ciaoSource", source.name), ("ciaoEvent", event.name)),
+            )
+        )
+
+    for state_view in block.states:
+        geometry = state_geometries[state_view.state]
+        if state_view.state.initial:
+            entry_geometry = Rect(
+                geometry.x + geometry.width // 2 - 8,
+                geometry.y - 48,
+                16,
+                16,
+            )
+            entry_id = f"{state_view.id}-entry"
+            nodes.append(
+                NodeCell(
+                    id=entry_id,
+                    label="",
+                    style=styles.ENTRY,
+                    geometry=entry_geometry,
+                    kind="entry",
+                    metadata=(("ciaoState", state_view.state.name),),
+                )
+            )
+            edges.append(
+                EdgeCell(
+                    id=f"{state_view.id}-entry-transition",
+                    label="",
+                    style=styles.ENTRY_TRANSITION,
+                    source_id=entry_id,
+                    target_id=state_view.id,
+                    points=(),
+                    kind="entryTransition",
+                    metadata=(("ciaoState", state_view.state.name),),
+                )
+            )
+            state_obstacles.append(entry_geometry)
 
     bottom_operations = [
         operation_view
@@ -496,44 +1040,153 @@ def _layout_block(
         for operation_view in block.operations
         if operation_view.operation.external
     ]
-    operation_geometries: dict[str, tuple[Rect, str]] = {}
+    operation_geometries: dict[str, tuple[Rect, str, Rect]] = {}
+    bottom_obstacles: list[Rect] = []
+    bottom_y = block_geometry.y + block_geometry.height
+    cursor_x = block_geometry.x + BOTTOM_MARGIN_X
 
-    for index, operation_view in enumerate(bottom_operations):
-        count = len(bottom_operations)
-        available = block_geometry.width - 148
-        center_x = (
-            block_geometry.x + 67 + available * (2 * index + 1) // (2 * count)
+    for action_view in _visible_actions(block):
+        width, height = measurements.action_sizes[action_view.id]
+        interface_id = f"{action_view.id}-interface"
+        interface_x = cursor_x + ACTION_INTERFACE_WIDTH // 2
+        base_geometry = Rect(
+            interface_x - ACTION_INTERFACE_ANCHOR_SIZE // 2,
+            bottom_y - ACTION_INTERFACE_ANCHOR_SIZE // 2,
+            ACTION_INTERFACE_ANCHOR_SIZE,
+            ACTION_INTERFACE_ANCHOR_SIZE,
+        )
+        tip_geometry = Rect(
+            interface_x - ACTION_INTERFACE_ANCHOR_SIZE // 2,
+            bottom_y
+            - ACTION_INTERFACE_HEIGHT
+            - ACTION_INTERFACE_ANCHOR_SIZE // 2,
+            ACTION_INTERFACE_ANCHOR_SIZE,
+            ACTION_INTERFACE_ANCHOR_SIZE,
+        )
+        label_geometry = Rect(
+            cursor_x + ACTION_INTERFACE_WIDTH + BOTTOM_ICON_LABEL_GAP,
+            bottom_y - height,
+            width,
+            height,
+        )
+        metadata = [
+            ("ciaoAction", action_view.action.name),
+            ("ciaoQualifiedName", action_view.action.qualified_name),
+            ("ciaoSignature", action_view.signature),
+        ]
+        if action_view.action.text is not None:
+            metadata.append(("ciaoText", action_view.action.text))
+        geometries[action_view.id] = label_geometry
+        geometries[f"{interface_id}-base"] = base_geometry
+        geometries[f"{interface_id}-tip"] = tip_geometry
+        nodes.extend(
+            (
+                NodeCell(
+                    id=f"{interface_id}-base",
+                    label="",
+                    style=styles.INTERFACE_ANCHOR,
+                    geometry=base_geometry,
+                    kind="interfaceAnchor",
+                ),
+                NodeCell(
+                    id=f"{interface_id}-tip",
+                    label="",
+                    style=styles.INTERFACE_ANCHOR,
+                    geometry=tip_geometry,
+                    kind="interfaceAnchor",
+                ),
+            )
+        )
+        edges.append(
+            EdgeCell(
+                id=interface_id,
+                label="",
+                style=styles.action_interface_style(block.role),
+                source_id=f"{interface_id}-base",
+                target_id=f"{interface_id}-tip",
+                points=(),
+                kind="actionInterface",
+                metadata=(
+                    ("ciaoAction", action_view.action.name),
+                    ("ciaoInterface", "required"),
+                ),
+            )
+        )
+        nodes.append(
+            NodeCell(
+                id=f"{action_view.id}-label",
+                label=action_view.action.name,
+                style=styles.ACTION_LABEL,
+                geometry=label_geometry,
+                kind="actionLabel",
+                metadata=tuple(metadata),
+            )
+        )
+        bottom_obstacles.append(label_geometry)
+        cursor_x = label_geometry.x + label_geometry.width + BOTTOM_ITEM_GAP
+
+    for operation_view in bottom_operations:
+        label_width, label_height = measurements.operation_sizes[
+            operation_view.id
+        ]
+        label_geometry = Rect(
+            cursor_x + ENDPOINT_SIZE + BOTTOM_ICON_LABEL_GAP,
+            bottom_y - label_height,
+            label_width,
+            label_height,
+        )
+        operation_geometry = Rect(
+            cursor_x,
+            bottom_y - ENDPOINT_SIZE,
+            ENDPOINT_SIZE,
+            ENDPOINT_SIZE,
         )
         operation_geometries[operation_view.id] = (
-            Rect(
-                center_x - ENDPOINT_SIZE // 2,
-                block_geometry.y + block_geometry.height - ENDPOINT_SIZE,
-                ENDPOINT_SIZE,
-                ENDPOINT_SIZE,
-            ),
+            operation_geometry,
             "bottom",
+            label_geometry,
         )
+        bottom_obstacles.extend((label_geometry, operation_geometry))
+        cursor_x = label_geometry.x + label_geometry.width + BOTTOM_ITEM_GAP
 
-    initial_state = next(item.state for item in block.states if item.state.initial)
-    initial_geometry = state_geometries[initial_state]
     for index, operation_view in enumerate(external_operations):
-        center_x = initial_geometry.x + 40 + index * 235
+        count = len(external_operations)
+        initial_geometries = [
+            state_geometries[item.state]
+            for item in block.states
+            if item.state.initial
+        ]
+        if initial_geometries:
+            # Внешний lollipop относится к входу автомата, поэтому привязываем
+            # группу к начальному состоянию, а не к геометрическому центру рамки.
+            initial_center_x = _center(initial_geometries[0]).x
+            center_x = (
+                initial_center_x
+                + 47
+                + round((index - (count - 1) / 2) * 90)
+            )
+        else:
+            available = block_geometry.width - 260
+            center_x = (
+                block_geometry.x
+                + 130
+                + available * (2 * index + 1) // (2 * count)
+            )
         operation_geometries[operation_view.id] = (
             Rect(center_x - 20, block_geometry.y - 40, 40, 40),
             "external",
+            Rect(0, 0, 0, 0),
         )
 
-    event_sources = {
-        transition_view.transition.event: transition_view.transition.source
-        for transition_view in block.transitions
-    }
     visible_operations = [
         operation_view
         for operation_view in block.operations
         if operation_view.id in operation_geometries
     ]
     for operation_view in visible_operations:
-        geometry, side = operation_geometries[operation_view.id]
+        geometry, side, prepared_label_geometry = operation_geometries[
+            operation_view.id
+        ]
         operation = operation_view.operation
         geometries[operation_view.id] = geometry
         nodes.append(
@@ -543,7 +1196,11 @@ def _layout_block(
                 style=styles.endpoint_style(
                     provided=operation.direction is OperationDirection.PROVIDED,
                     side=side,
-                    stroke=styles.ROLE_STROKES[block.role],
+                    stroke=(
+                        styles.QUERY_STROKE
+                        if operation.kind is OperationKind.QUERY
+                        else styles.ROLE_STROKES[block.role]
+                    ),
                 ),
                 geometry=geometry,
                 kind="operation",
@@ -551,18 +1208,32 @@ def _layout_block(
                     ("ciaoOperation", operation.name),
                     ("ciaoDirection", operation.direction.value),
                     ("ciaoKind", operation.kind.value),
+                    ("ciaoSignature", operation_view.label),
                     ("ciaoExternal", str(operation.external).lower()),
                     *_operation_text_metadata(operation),
                 ),
             )
         )
         display_label = _visible_operation_label(operation_view)
+        label_geometry = (
+            _operation_label_geometry(
+                geometry,
+                side,
+                measurements.operation_sizes[operation_view.id],
+            )
+            if side == "external"
+            else prepared_label_geometry
+        )
         nodes.append(
             NodeCell(
                 id=f"{operation_view.id}-label",
                 label=display_label,
-                style=styles.ENDPOINT_LABEL,
-                geometry=_operation_label_geometry(geometry, side, display_label),
+                style=(
+                    styles.QUERY_ENDPOINT_LABEL
+                    if operation.kind is OperationKind.QUERY
+                    else styles.ENDPOINT_LABEL
+                ),
+                geometry=label_geometry,
                 kind="operationLabel",
                 metadata=(
                     ("ciaoOperation", operation.name),
@@ -571,28 +1242,12 @@ def _layout_block(
                 ),
             )
         )
-        if operation.external:
-            target_state = event_sources.get(operation, initial_state)
-            edges.append(
-                EdgeCell(
-                    id=f"{operation_view.id}-external-link",
-                    label="",
-                    style=styles.external_interface_style(block.role),
-                    source_id=operation_view.id,
-                    target_id=state_ids[target_state],
-                    points=(),
-                    kind="externalInterface",
-                    metadata=(("ciaoOperation", operation.name),),
-                )
-            )
-
-    grouped: dict[tuple[object, object], list[object]] = defaultdict(list)
-    for transition_view in block.transitions:
-        transition = transition_view.transition
-        grouped[(transition.source, transition.event)].append(transition_view)
-
-    label_obstacles = [context_geometry, *state_geometries.values()]
-    decision_index = 0
+    label_obstacles = [
+        context_geometry,
+        *state_obstacles,
+        *bottom_obstacles,
+    ]
+    reserved_paths: list[tuple[Point, ...]] = []
     reverse_lane = 0
     for (source, event), transition_views in grouped.items():
         # Else не имеет runtime-приоритета, но завершает развилку визуально.
@@ -604,12 +1259,17 @@ def _layout_block(
         if len(transition_views) == 1:
             transition_view = transition_views[0]
             target = transition_view.transition.target
-            points = _route_transition(
+            label = measurements.transition_labels[transition_view.id]
+            label_width, _ = measurements.transition_sizes[transition_view.id]
+            points = _safe_transition_route(
                 source_geometry,
                 state_geometries[target],
                 source_index=state_indexes[source],
                 target_index=state_indexes[target],
                 lane=reverse_lane,
+                label_width=label_width,
+                obstacles=label_obstacles,
+                reserved_paths=reserved_paths,
             )
             is_reverse = state_indexes[source] > state_indexes[target]
             is_loop = source is target
@@ -630,11 +1290,12 @@ def _layout_block(
                 preferred_sides = ("above", "below", "left", "right")
             else:
                 preferred_sides = ("above", "below", "right", "left")
-            label = _transition_label(
-                transition_view.transition,
-                operation_labels,
-            )
-            label_offset, label_width, label_height = _place_edge_label(
+            (
+                label_position,
+                label_offset,
+                label_width,
+                label_height,
+            ) = _place_edge_label(
                 source=source_geometry,
                 target=state_geometries[target],
                 points=points,
@@ -653,7 +1314,7 @@ def _layout_block(
                     points=points,
                     kind="transition",
                     metadata=_transition_metadata(transition_view.transition),
-                    label_position=0,
+                    label_position=label_position,
                     label_offset=label_offset,
                     label_width=label_width,
                     label_height=label_height,
@@ -661,28 +1322,17 @@ def _layout_block(
             )
             continue
 
-        decision_id = f"{block.id}-decision-{decision_index}"
-        decision_geometry = Rect(
-            _center(source_geometry).x - 20 + decision_index * 42,
-            source_geometry.y + source_geometry.height + 78 + decision_index * 18,
-            40,
-            40,
+        decision_id = (
+            f"{block.id}-decision-{source.qualified_name}-{event.qualified_name}"
         )
-        decision_index += 1
-        geometries[decision_id] = decision_geometry
-        label_obstacles.append(decision_geometry)
-        nodes.append(
-            NodeCell(
-                id=decision_id,
-                label="",
-                style=styles.DECISION,
-                geometry=decision_geometry,
-                kind="decision",
-                metadata=(("ciaoSource", source.name), ("ciaoEvent", event.name)),
-            )
-        )
+        decision_geometry = decision_geometries[(source, event)]
         event_label = escape(operation_labels[event])
-        event_offset, event_width, event_height = _place_edge_label(
+        (
+            event_position,
+            event_offset,
+            event_width,
+            event_height,
+        ) = _place_edge_label(
             source=source_geometry,
             target=decision_geometry,
             points=(),
@@ -700,7 +1350,7 @@ def _layout_block(
                 target_id=decision_id,
                 points=(),
                 kind="decisionIncoming",
-                label_position=0,
+                label_position=event_position,
                 label_offset=event_offset,
                 label_width=event_width,
                 label_height=event_height,
@@ -735,12 +1385,14 @@ def _layout_block(
                     if branch_index % 2 == 0
                     else ("below", "above", "right", "left")
                 )
-            label = _transition_details(
-                transition_view.transition,
-                operation_labels,
-            )
+            label = measurements.transition_details[transition_view.id]
             if label:
-                label_offset, label_width, label_height = _place_edge_label(
+                (
+                    label_position,
+                    label_offset,
+                    label_width,
+                    label_height,
+                ) = _place_edge_label(
                     source=decision_geometry,
                     target=target_geometry,
                     points=branch_points,
@@ -750,9 +1402,13 @@ def _layout_block(
                     bounds=block_geometry,
                 )
             else:
+                label_position = None
                 label_offset = None
                 label_width = None
                 label_height = None
+            reserved_paths.append(
+                (decision_center, *branch_points, target_center)
+            )
             edges.append(
                 EdgeCell(
                     id=transition_view.id,
@@ -763,7 +1419,7 @@ def _layout_block(
                     points=branch_points,
                     kind="transitionBranch",
                     metadata=_transition_metadata(transition_view.transition),
-                    label_position=0 if label else None,
+                    label_position=label_position,
                     label_offset=label_offset,
                     label_width=label_width,
                     label_height=label_height,
@@ -852,32 +1508,55 @@ def layout_diagram(description: DiagramDescription) -> DiagramPage:
         )
     }
 
-    row_heights: dict[int, int] = {}
+    block_count = len(description.blocks)
+    grid_columns = max(1, ceil(sqrt(block_count)))
+    grid_rows = ceil(block_count / grid_columns) if block_count else 0
+    block_measurements = {
+        block.id: _measure_block(block, connected_operation_ids)
+        for block in description.blocks
+    }
+    block_sizes = {
+        block_id: (measurement.width, measurement.height)
+        for block_id, measurement in block_measurements.items()
+    }
+    column_widths = [0] * grid_columns
+    row_heights = [0] * grid_rows
     for index, block in enumerate(description.blocks):
-        row = index // BLOCKS_PER_ROW
-        row_heights[row] = max(row_heights.get(row, 0), _block_height(block))
+        row = index // grid_columns
+        column = index % grid_columns
+        width, height = block_sizes[block.id]
+        column_widths[column] = max(column_widths[column], width)
+        row_heights[row] = max(row_heights[row], height)
 
-    row_origins: dict[int, int] = {}
+    column_origins: list[int] = []
+    current_x = PAGE_MARGIN_X
+    for width in column_widths:
+        column_origins.append(current_x)
+        current_x += width + BLOCK_GAP_X
+
+    row_origins: list[int] = []
     current_y = PAGE_MARGIN_Y
-    for row in range(max(row_heights, default=-1) + 1):
-        row_origins[row] = current_y
-        current_y += row_heights[row] + BLOCK_GAP_Y
+    for height in row_heights:
+        row_origins.append(current_y)
+        current_y += height + BLOCK_GAP_Y
 
     block_geometries: dict[str, Rect] = {}
     for index, block in enumerate(description.blocks):
-        row = index // BLOCKS_PER_ROW
-        column = index % BLOCKS_PER_ROW
+        row = index // grid_columns
+        column = index % grid_columns
+        block_width, block_height = block_sizes[block.id]
         block_geometry = Rect(
-            PAGE_MARGIN_X + column * (BLOCK_WIDTH + BLOCK_GAP_X),
+            column_origins[column],
             row_origins[row],
-            BLOCK_WIDTH,
-            _block_height(block),
+            block_width,
+            block_height,
         )
         block_geometries[block.id] = block_geometry
         block_nodes, block_edges, inner_geometries = _layout_block(
             block,
             block_geometry,
             connected_operation_ids,
+            block_measurements[block.id],
         )
         nodes.extend(block_nodes)
         edges.extend(block_edges)
@@ -930,7 +1609,11 @@ def layout_diagram(description: DiagramDescription) -> DiagramPage:
             NodeCell(
                 id=f"{connection.id}-label",
                 label=connection_label,
-                style=styles.CONNECTION_LABEL,
+                style=styles.connection_label_style(
+                    styles.QUERY_STROKE
+                    if connection.kind is OperationKind.QUERY
+                    else "#000000"
+                ),
                 geometry=Rect(
                     junction_center.x - label_width // 2,
                     junction_center.y - label_height - 10,
@@ -964,6 +1647,11 @@ def layout_diagram(description: DiagramDescription) -> DiagramPage:
                             required=required,
                             self_connection=is_self_connection,
                         ),
+                        stroke=(
+                            styles.QUERY_STROKE
+                            if connection.kind is OperationKind.QUERY
+                            else "#000000"
+                        ),
                     ),
                     source_id=owner_id,
                     target_id=junction_id,
@@ -980,11 +1668,10 @@ def layout_diagram(description: DiagramDescription) -> DiagramPage:
                 )
             )
 
-    columns = min(BLOCKS_PER_ROW, len(description.blocks))
     width = (
         PAGE_MARGIN_X * 2
-        + columns * BLOCK_WIDTH
-        + max(0, columns - 1) * BLOCK_GAP_X
+        + sum(column_widths)
+        + max(0, len(column_widths) - 1) * BLOCK_GAP_X
     )
     height = (
         current_y - BLOCK_GAP_Y + PAGE_MARGIN_Y

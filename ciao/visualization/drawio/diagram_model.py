@@ -5,7 +5,15 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from ciao.domain import AutomatonObject, AutomatonRole, Operation, State, Transition
+from ciao.domain import (
+    Action,
+    AutomatonObject,
+    AutomatonRole,
+    Operation,
+    OperationKind,
+    State,
+    Transition,
+)
 from ciao.infrastructure import OperationSignature
 
 
@@ -33,6 +41,15 @@ class OperationView:
 
 
 @dataclass(frozen=True)
+class ActionView:
+    """Action без Emit/Emits, который отображается внутри автомата."""
+
+    id: str
+    action: Action
+    signature: str
+
+
+@dataclass(frozen=True)
 class TransitionView:
     id: str
     transition: Transition
@@ -46,6 +63,7 @@ class AutomatonView:
     context_fields: tuple[ContextField, ...]
     states: tuple[StateView, ...]
     operations: tuple[OperationView, ...]
+    actions: tuple[ActionView, ...]
     transitions: tuple[TransitionView, ...]
 
 
@@ -55,6 +73,7 @@ class ConnectionView:
     required_endpoint_id: str
     provided_endpoint_id: str
     label: str
+    kind: OperationKind
 
 
 @dataclass(frozen=True)

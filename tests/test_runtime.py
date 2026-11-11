@@ -282,7 +282,7 @@ class RuntimeTests(unittest.TestCase):
         result = run_calculation([2])
 
         self.assertEqual(
-            ["start", "tick", "draw", "draw_completed", "tick"],
+            ["start", "tick", "draw", "draw_completed", "tick", "tick"],
             [event.operation for event in result.trace],
         )
         rendered = format_operation_trace(result.trace)

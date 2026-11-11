@@ -87,9 +87,8 @@ class Controller(ControllerAutomaton[ControllerContext]):
         target=rejected,
     )
 
-
-def run_check(value: int, threshold: int, *, ready: bool = True) -> str:
-    """Выполняет одну проверку и возвращает имя выбранного состояния."""
+def build_sample(value: int=12, threshold: int=10, *, ready: bool = True) -> Program:
+    """Строит учебную программу с двумя объектами и синхронным Query."""
 
     sensor = AutomatonObject(
         "sensor",
@@ -114,11 +113,16 @@ def run_check(value: int, threshold: int, *, ready: bool = True) -> str:
             ),
         ),
     )
+    return program
 
+def run_check(value: int, threshold: int, *, ready: bool = True) -> str:
+    """Выполняет одну проверку и возвращает имя выбранного состояния."""
+
+    program = build_sample(value=value, threshold=threshold, ready=ready)
     runtime = Runtime(program)
-    runtime.send(controller, Controller.check)
+    runtime.send(program.objects[1], Controller.check)
     runtime.run()
-    return runtime.snapshot(controller).state.name
+    return runtime.snapshot(program.objects[1]).state.name
 
 
 def main() -> None:

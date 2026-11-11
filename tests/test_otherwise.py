@@ -348,7 +348,10 @@ class OtherwiseRuntimeTests(unittest.TestCase):
         result = runtime.step()
 
         self.assertEqual("on_tick_when_complete", result.transition)
-        self.assertIs(SumController.done, runtime.snapshot(sample.controller).state)
+        self.assertIs(
+            SumController.completed,
+            runtime.snapshot(sample.controller).state,
+        )
         self.assertEqual(0, runtime.pending_messages)
 
 

@@ -34,6 +34,7 @@ class SumController(ControllerAutomaton[SumContext]):
     idle = State(initial=True)
     running = State()
     publishing = State()
+    completed = State()
     done = State(final=True)
 
     @provided_command(external=True)
@@ -135,7 +136,7 @@ class SumController(ControllerAutomaton[SumContext]):
         event=tick,
         otherwise=True,
         actions=(),
-        target=done,
+        target=completed,
     )
 
     on_draw_completed = transition(
@@ -145,10 +146,16 @@ class SumController(ControllerAutomaton[SumContext]):
     )
 
     on_reset = transition(
-        source=done,
+        source=completed,
         event=reset,
         actions=(clear,),
         target=idle,
+    )
+
+    on_finish = transition(
+        source=completed,
+        event=tick,
+        target=done,
     )
 
 

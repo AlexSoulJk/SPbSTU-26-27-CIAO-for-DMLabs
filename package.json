@@ -1,0 +1,11 @@
+{
+  "name": "spbstu-ciao-layout-tools",
+  "private": true,
+  "description": "Экспериментальные инструменты компоновки draw.io для CIAO",
+  "scripts": {
+    "benchmark:drawio": "python -m examples.benchmark_drawio_layouts"
+  },
+  "devDependencies": {
+    "elkjs": "0.12.1"
+  }
+}

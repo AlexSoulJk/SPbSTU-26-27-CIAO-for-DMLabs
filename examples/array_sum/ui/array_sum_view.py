@@ -111,6 +111,8 @@ class ArraySumView(ttk.Frame):
         *,
         on_initialize: Callable[[], None],
         on_step: Callable[[], None],
+        on_reset: Callable[[], None],
+        on_finish: Callable[[], None],
     ) -> None:
         super().__init__(master)
         self.columnconfigure(0, weight=1)
@@ -126,19 +128,35 @@ class ArraySumView(ttk.Frame):
         self._state = ttk.Label(self)
         self._state.grid(row=4, column=0, sticky="w", padx=12, pady=(4, 8))
 
+        self._controls = ttk.Frame(self)
+        self._controls.grid(row=5, column=0, pady=10)
         self._initialize = _ScheduledButton(
-            self,
+            self._controls,
             text="Init",
             command=on_initialize,
         )
-        self._initialize.grid(row=5, column=0, pady=10)
+        self._initialize.grid(row=0, column=0, padx=4)
         self._step = _ScheduledButton(
-            self,
+            self._controls,
             text="Следующий шаг",
             command=on_step,
         )
-        self._step.grid(row=5, column=0, pady=10)
+        self._step.grid(row=0, column=0, padx=4)
         self._step.grid_remove()
+        self._reset = _ScheduledButton(
+            self._controls,
+            text="Reset",
+            command=on_reset,
+        )
+        self._reset.grid(row=0, column=0, padx=4)
+        self._reset.grid_remove()
+        self._finish = _ScheduledButton(
+            self._controls,
+            text="Finish",
+            command=on_finish,
+        )
+        self._finish.grid(row=0, column=1, padx=4)
+        self._finish.grid_remove()
 
     def render(
         self,
@@ -151,6 +169,7 @@ class ArraySumView(ttk.Frame):
         state_name: str,
         show_initialize: bool,
         step_enabled: bool,
+        show_completed_actions: bool,
     ) -> None:
         """Обновляет данные и выбирает органы управления по состоянию автомата."""
 
@@ -160,16 +179,26 @@ class ArraySumView(ttk.Frame):
         self._ticks.set_value(tick_count)
         self._state.configure(text=f"Состояние: {state_name}")
 
-        # Кнопки взаимоисключающие: start доступна только до перехода из idle,
-        # после него пользователь управляет обычными командами tick.
+        for button in (
+            self._initialize,
+            self._step,
+            self._reset,
+            self._finish,
+        ):
+            button.set_enabled(False)
+            button.grid_remove()
+
+        # В completed пользователь явно выбирает возврат к idle или отдельный
+        # завершающий tick, который переводит автомат в терминальный Exit.
         if show_initialize:
-            self._step.set_enabled(False)
-            self._step.grid_remove()
             self._initialize.grid()
             self._initialize.set_enabled(True)
+        elif show_completed_actions:
+            self._reset.grid()
+            self._finish.grid()
+            self._reset.set_enabled(True)
+            self._finish.set_enabled(True)
         else:
-            self._initialize.set_enabled(False)
-            self._initialize.grid_remove()
             self._step.grid()
             self._step.set_enabled(step_enabled)
 

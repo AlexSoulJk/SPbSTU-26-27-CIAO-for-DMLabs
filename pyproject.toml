@@ -19,6 +19,9 @@ dev = [
 [tool.setuptools.packages.find]
 include = ["ciao*"]
 
+[tool.setuptools.package-data]
+"ciao.visualization.drawio" = ["*.cjs"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]

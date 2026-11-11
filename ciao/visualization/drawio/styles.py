@@ -17,6 +17,8 @@ ROLE_FILLS = {
     AutomatonRole.VIEW: "#EBF9F3",
 }
 
+QUERY_STROKE = "#B85450"
+
 
 BLOCK_STYLES = {
     AutomatonRole.BASE: (
@@ -54,6 +56,28 @@ FINAL_STATE_STYLES = {
     for role in AutomatonRole
 }
 
+ENTRY = (
+    "ellipse;whiteSpace=wrap;html=1;aspect=fixed;fillColor=#000000;"
+    "strokeColor=#000000;strokeWidth=1;"
+)
+ENTRY_TRANSITION = (
+    "edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;"
+    "jettySize=auto;html=1;endArrow=block;endFill=1;strokeWidth=2;"
+    "strokeColor=#000000;"
+)
+EXIT = (
+    "shape=endState;whiteSpace=wrap;html=1;aspect=fixed;"
+    "fillColor=#000000;strokeColor=#000000;strokeWidth=2;"
+)
+STATE_LABEL = (
+    "text;html=1;whiteSpace=wrap;strokeColor=none;fillColor=none;"
+    "align=center;verticalAlign=middle;fontStyle=1;"
+)
+ACTION_LABEL = (
+    "text;html=1;whiteSpace=wrap;strokeColor=none;fillColor=none;"
+    "align=center;verticalAlign=middle;"
+)
+
 DECISION = (
     "rhombus;perimeter=rhombusPerimeter;whiteSpace=wrap;html=1;"
     "fillColor=#FFF6E2;strokeColor=#D59D35;strokeWidth=2;"
@@ -79,6 +103,11 @@ ENDPOINT_LABEL = (
     "text;html=1;whiteSpace=wrap;strokeColor=none;fillColor=none;"
     "align=left;verticalAlign=middle;"
 )
+QUERY_ENDPOINT_LABEL = ENDPOINT_LABEL + f"fontColor={QUERY_STROKE};"
+INTERFACE_ANCHOR = (
+    "ellipse;whiteSpace=wrap;html=1;fillColor=none;strokeColor=none;"
+    "opacity=0;resizable=0;movable=0;rotatable=0;connectable=0;"
+)
 
 
 def endpoint_style(*, provided: bool, side: str, stroke: str) -> str:
@@ -96,6 +125,20 @@ def endpoint_style(*, provided: bool, side: str, stroke: str) -> str:
     return (
         f"shape={shape};direction={directions[side]};whiteSpace=wrap;html=1;"
         f"fillColor=#FFFFFF;strokeColor={stroke};strokeWidth=2.3;{rotation}"
+    )
+
+
+def action_interface_style(role: AutomatonRole) -> str:
+    """Рисует фиксированную ножку с подковой без поворота наконечника."""
+
+    return (
+        "edgeStyle=none;rounded=0;orthogonalLoop=1;html=1;"
+        "endArrow=halfCircle;endFill=0;endSize=6;strokeWidth=2.3;"
+        "sketch=0;fontSize=12;curved=0;noEdgeStyle=1;"
+        "exitX=0.5;exitY=0.5;exitDx=0;exitDy=0;exitPerimeter=0;"
+        "entryX=0.5;entryY=0.5;entryDx=0;entryDy=0;entryPerimeter=0;"
+        "defaultLabelBackgroundColor=page;fillColor=#0050ef;"
+        f"strokeColor={ROLE_STROKES[role]};"
     )
 
 
@@ -129,6 +172,7 @@ def connection_half_style(
     required: bool,
     exit_side: str,
     exit_offset: float = 0.5,
+    stroke: str = "#000000",
 ) -> str:
     """Оформляет половину assembly-связи с socket или ball у стыка."""
 
@@ -141,8 +185,10 @@ def connection_half_style(
     arrow = "halfCircle" if required else "oval"
     size = "6" if required else "10"
     return (
-        "rounded=0;orthogonalLoop=1;jettySize=auto;html=1;"
+        "edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;"
+        "jettySize=auto;html=1;"
         f"endArrow={arrow};endFill=0;endSize={size};strokeWidth=1;"
+        f"strokeColor={stroke};"
         "sketch=0;defaultLabelBackgroundColor=page;"
         f"{exits[exit_side]}"
     )
@@ -157,3 +203,9 @@ CONNECTION_LABEL = (
     "text;html=1;whiteSpace=wrap;strokeColor=none;fillColor=none;"
     "align=center;verticalAlign=middle;rounded=0;"
 )
+
+
+def connection_label_style(stroke: str) -> str:
+    """Окрашивает только семантическую подпись, не меняя assembly-нотацию."""
+
+    return CONNECTION_LABEL + f"fontColor={stroke};"

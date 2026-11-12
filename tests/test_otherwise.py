@@ -26,7 +26,7 @@ from ciao import (
     provided_command,
     transition,
 )
-from examples.array_sum.automatos import SumController
+from examples.array_sum import CalculationMode, StartInput, SumController, SumView
 from examples.array_sum.program import build_sample
 
 
@@ -338,21 +338,26 @@ class OtherwiseRuntimeTests(unittest.TestCase):
         self.assertIn("переходы не объявлены", result.error or "")
         self.assertNotIn("Все Guard ложны", result.error or "")
 
-    def test_sample_uses_otherwise_after_last_confirmation(self) -> None:
+    def test_sample_uses_otherwise_for_last_step(self) -> None:
         sample = build_sample()
         runtime = Runtime(sample.program)
-        runtime.send(sample.controller, SumController.start, values=[])
+        runtime.send(
+            sample.view,
+            SumView.init_clicked,
+            StartInput((7,), CalculationMode.STEP_BY_STEP),
+        )
         runtime.run()
 
-        runtime.send(sample.controller, SumController.tick)
+        runtime.send(sample.view, SumView.next_clicked)
+        runtime.step()
         result = runtime.step()
 
-        self.assertEqual("on_tick_when_complete", result.transition)
+        self.assertEqual("on_last_step_tick", result.transition)
         self.assertIs(
-            SumController.completed,
+            SumController.publishing,
             runtime.snapshot(sample.controller).state,
         )
-        self.assertEqual(0, runtime.pending_messages)
+        self.assertGreater(runtime.pending_messages, 0)
 
 
 class OtherwiseCompilerTests(unittest.TestCase):

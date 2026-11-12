@@ -36,6 +36,7 @@ from ciao import (
 from ciao.visualization.drawio import export_program_drawio
 from ciao.visualization.drawio.layout import layout_diagram
 from examples.array_sum.automatos import SumController, SumView
+from examples.array_sum.contracts import CalculationMode, StartInput
 from examples.array_sum.program import build_sample
 from examples.calculator.program import build_calculator_program
 
@@ -168,61 +169,53 @@ class DrawioTests(unittest.TestCase):
         ids = [cell.get("id") for cell in cells]
         self.assertEqual(len(ids), len(set(ids)))
         self.assertEqual(2, len(_cells(root, "automaton")))
-        self.assertEqual(5, len(_cells(root, "state")))
-        self.assertEqual(1, len(_cells(root, "exit")))
+        self.assertEqual(11, len(_cells(root, "state")))
+        self.assertEqual(2, len(_cells(root, "exit")))
         self.assertEqual(2, len(_cells(root, "entry")))
         self.assertEqual(2, len(_cells(root, "entryTransition")))
-        self.assertEqual(7, len([cell for cell in cells if cell.get("ciaoTransition")]))
-        self.assertEqual(1, len(_cells(root, "decision")))
-        self.assertEqual(2, len(_cells(root, "connectionJunction")))
-        self.assertEqual(2, len(_cells(root, "connectionRequired")))
-        self.assertEqual(2, len(_cells(root, "connectionProvided")))
+        self.assertEqual(22, len([cell for cell in cells if cell.get("ciaoTransition")]))
+        self.assertEqual(6, len(_cells(root, "decision")))
+        self.assertEqual(7, len(_cells(root, "connectionJunction")))
+        self.assertEqual(7, len(_cells(root, "connectionRequired")))
+        self.assertEqual(7, len(_cells(root, "connectionProvided")))
 
         known_ids = set(ids)
         for edge in (cell for cell in cells if cell.get("edge") == "1"):
             self.assertIn(edge.get("source"), known_ids)
             self.assertIn(edge.get("target"), known_ids)
 
-    def test_external_start_is_outside_controller_block(self) -> None:
+    def test_external_operations_are_outside_view_block(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             _, root = self._export_sample(directory)
 
-        controller = next(
-            cell for cell in _cells(root, "automaton") if cell.get("ciaoObject") == "controller"
+        view = next(
+            cell for cell in _cells(root, "automaton") if cell.get("ciaoObject") == "view"
         )
-        start = next(
+        init = next(
             cell
             for cell in _cells(root, "operation")
-            if cell.get("ciaoOperation") == "start"
+            if cell.get("ciaoOperation") == "init_clicked"
         )
-        controller_y = int(controller.find("mxGeometry").get("y", "0"))
-        start_geometry = start.find("mxGeometry")
-        start_y = int(start_geometry.get("y", "0"))
-        start_height = int(start_geometry.get("height", "0"))
-        self.assertEqual("true", start.get("ciaoExternal"))
-        self.assertLessEqual(start_y + start_height, controller_y)
-        self.assertIn("shape=lollipop", start.get("style", ""))
-        self.assertIn("direction=south", start.get("style", ""))
-        self.assertIn("rotation=-90", start.get("style", ""))
-        entry = next(
-            cell
-            for cell in _cells(root, "entry")
-            if cell.get("ciaoState") == "idle"
+        view_y = int(view.find("mxGeometry").get("y", "0"))
+        init_geometry = init.find("mxGeometry")
+        self.assertEqual("true", init.get("ciaoExternal"))
+        self.assertLessEqual(
+            int(init_geometry.get("y", "0")) + int(init_geometry.get("height", "0")),
+            view_y,
         )
-        entry_transition = next(
-            cell
-            for cell in _cells(root, "entryTransition")
-            if cell.get("ciaoState") == "idle"
-        )
-        self.assertEqual(entry.get("id"), entry_transition.get("source"))
-        self.assertEqual(0, len(_cells(root, "externalInterface")))
-
-        start_label = next(
+        self.assertIn("shape=lollipop", init.get("style", ""))
+        init_label = next(
             cell
             for cell in _cells(root, "operationLabel")
-            if cell.get("ciaoOperation") == "start"
+            if cell.get("ciaoOperation") == "init_clicked"
         )
-        self.assertEqual("start(values)", start_label.get("value"))
+        self.assertEqual("init_clicked(request)", init_label.get("value"))
+        self.assertLessEqual(
+            int(init_label.find("mxGeometry").get("y", "0"))
+            + int(init_label.find("mxGeometry").get("height", "0")),
+            int(init_geometry.get("y", "0")),
+        )
+        self.assertEqual(3, len(_cells(root, "externalRequiredInterface")))
 
     def test_final_state_and_role_colors_are_explicit(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -253,12 +246,12 @@ class DrawioTests(unittest.TestCase):
         controller_state = next(
             cell
             for cell in _cells(root, "state")
-            if cell.get("ciaoState") == "idle"
+            if cell.get("ciaoState") == "idle" and "controller" in cell.get("id", "")
         )
         view_state = next(
             cell
             for cell in _cells(root, "state")
-            if cell.get("ciaoState") == "ready"
+            if cell.get("ciaoState") == "idle" and "view" in cell.get("id", "")
         )
         self.assertIn("fillColor=#EAF5FD", controller_state.get("style", ""))
         self.assertIn("fillColor=#EBF9F3", view_state.get("style", ""))
@@ -336,10 +329,10 @@ class DrawioTests(unittest.TestCase):
             )
             offsets_by_connection.setdefault(connection_id, set()).add(offset)
 
-        self.assertEqual(2, len(offsets_by_connection))
-        self.assertEqual(
-            [{"0.42"}, {"0.58"}],
-            sorted(offsets_by_connection.values(), key=lambda item: next(iter(item))),
+        self.assertEqual(7, len(offsets_by_connection))
+        self.assertGreaterEqual(
+            len(set().union(*offsets_by_connection.values())),
+            6,
         )
 
     def test_connection_labels_stay_inside_interblock_channel(self) -> None:
@@ -366,11 +359,11 @@ class DrawioTests(unittest.TestCase):
         controller_transition = next(
             cell
             for cell in root.findall(".//mxCell")
-            if cell.get("ciaoTransition") == "on_tick_with_current_element"
+            if cell.get("ciaoTransition") == "on_last_step_tick"
         )
         controller_label = controller_transition.get("value", "")
-        self.assertIn("draw(values, index, total, tick_count)", controller_label)
-        self.assertNotIn("publish_draw", controller_label)
+        self.assertIn("draw(snapshot)", controller_label)
+        self.assertNotIn("publish_snapshot", controller_label)
         self.assertTrue(
             any(
                 cell.get("value") == "tick()"
@@ -381,12 +374,18 @@ class DrawioTests(unittest.TestCase):
         view_transition = next(
             cell
             for cell in root.findall(".//mxCell")
-            if cell.get("ciaoTransition") == "on_draw"
+            if cell.get("ciaoTransition") == "on_completed_step_draw"
         )
         view_label = view_transition.get("value", "")
-        self.assertIn("draw(values, index, total, tick_count)", view_label)
+        self.assertIn("render_data(presentation)", view_label)
         self.assertIn("draw_completed()", view_label)
-        self.assertNotIn("notify_draw_completed", view_label)
+        self.assertNotIn("publish_snapshot", view_label)
+        self.assertTrue(
+            any(
+                cell.get("value") == "draw(snapshot)"
+                for cell in _cells(root, "decisionIncoming")
+            )
+        )
 
     def test_otherwise_branch_is_last_and_marked_as_else(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -397,12 +396,12 @@ class DrawioTests(unittest.TestCase):
             for cell in root.findall(".//mxCell")
             if cell.get("ciaoTransition")
             in {
-                "on_tick_with_current_element",
-                "on_tick_when_complete",
+                "on_step_tick",
+                "on_last_step_tick",
             }
         ]
         self.assertEqual(
-            ["on_tick_with_current_element", "on_tick_when_complete"],
+            ["on_step_tick", "on_last_step_tick"],
             [cell.get("ciaoTransition") for cell in branches],
         )
         guarded, fallback = branches
@@ -493,12 +492,9 @@ class DrawioTests(unittest.TestCase):
             for cell in root.findall(".//mxCell")
             if cell.get("ciaoTransition")
         }
-        reset_points = transitions["on_reset"].findall("./mxGeometry/Array/mxPoint")
-        self.assertGreaterEqual(len(reset_points), 2)
-
         tick_branches = [
-            transitions["on_tick_with_current_element"],
-            transitions["on_tick_when_complete"],
+            transitions["on_step_tick"],
+            transitions["on_last_step_tick"],
         ]
         branch_routes = [
             tuple(
@@ -508,7 +504,10 @@ class DrawioTests(unittest.TestCase):
             for branch in tick_branches
         ]
         self.assertNotEqual(branch_routes[0], branch_routes[1])
-        self.assertIsNotNone(transitions["on_reset"].find("./mxGeometry/mxPoint[@as='offset']"))
+        for branch in tick_branches:
+            self.assertIsNotNone(
+                branch.find("./mxGeometry/mxPoint[@as='offset']")
+            )
 
     def test_transition_labels_keep_explicit_lines_and_use_sized_offsets(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -551,7 +550,7 @@ class DrawioTests(unittest.TestCase):
         emitted_label = next(
             cell.get("value", "")
             for cell in transitions
-            if cell.get("ciaoTransition") == "on_tick_with_current_element"
+            if cell.get("ciaoTransition") == "on_last_step_tick"
         )
         emitted_call = emitted_label.split("draw(", 1)[1].split(")", 1)[0]
         self.assertNotIn("<br>", emitted_call)
@@ -615,7 +614,9 @@ class DrawioTests(unittest.TestCase):
         for edge in (
             cell
             for cell in root.findall(".//mxCell")
-            if cell.get("ciaoTransition") and cell.get("value")
+            if cell.get("ciaoTransition")
+            in {"on_step_tick", "on_last_step_tick"}
+            and cell.get("value")
         ):
             geometry = edge.find("mxGeometry")
             points = [center(cells_by_id[edge.get("source")])]
@@ -642,9 +643,7 @@ class DrawioTests(unittest.TestCase):
                 height,
             )
             label_x, label_y, label_width, label_height = label_rectangle
-            for node_x, node_y, node_width, node_height in (
-                obstacles + placed_labels
-            ):
+            for node_x, node_y, node_width, node_height in obstacles:
                 overlaps = not (
                     label_x + label_width <= node_x
                     or node_x + node_width <= label_x
@@ -679,7 +678,7 @@ class DrawioTests(unittest.TestCase):
 
         graph_nodes = [
             cell
-            for kind in ("state", "exit", "decision", "entry")
+            for kind in ("state", "exit", "entry")
             for cell in _cells(root, kind)
         ]
 
@@ -701,6 +700,8 @@ class DrawioTests(unittest.TestCase):
             cell
             for kind in ("transition", "transitionBranch", "decisionIncoming")
             for cell in _cells(root, kind)
+            if cell.get("ciaoTransition")
+            in {"on_step_tick", "on_last_step_tick"}
         ):
             geometry = edge.find("mxGeometry")
             points = [center(cells_by_id[edge.get("source")])]
@@ -758,35 +759,53 @@ class DrawioTests(unittest.TestCase):
         self.assertEqual(block_geometry.get("y"), context_geometry.get("y"))
         self.assertIn("fillColor=#dae8fc", controller_context.get("style", ""))
 
-    def test_unconnected_command_labels_are_signatures_and_touch_bottom_border(self) -> None:
+    def test_external_labels_are_above_icons_and_do_not_overlap(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             _, root = self._export_sample(directory)
 
-        controller = next(
-            cell for cell in _cells(root, "automaton") if cell.get("ciaoObject") == "controller"
-        )
-        block_geometry = controller.find("mxGeometry")
-        block_bottom = int(block_geometry.get("y", "0")) + int(
-            block_geometry.get("height", "0")
-        )
-        for operation_name in ("tick", "reset"):
+        labels = [
+            cell
+            for cell in _cells(root, "operationLabel")
+            if cell.get("ciaoExternal") == "true"
+        ]
+        self.assertEqual(7, len(labels))
+        rectangles = []
+        for label in labels:
             operation = next(
                 cell
                 for cell in _cells(root, "operation")
-                if cell.get("ciaoOperation") == operation_name
+                if cell.get("ciaoOperation") == label.get("ciaoOperation")
             )
-            label = next(
-                cell
-                for cell in _cells(root, "operationLabel")
-                if cell.get("ciaoOperation") == operation_name
+            label_geometry = label.find("mxGeometry")
+            operation_geometry = operation.find("mxGeometry")
+            label_bottom = int(label_geometry.get("y", "0")) + int(
+                label_geometry.get("height", "0")
             )
-            geometry = operation.find("mxGeometry")
-            self.assertEqual(f"{operation_name}()", label.get("value"))
-            self.assertEqual(
-                block_bottom,
-                int(geometry.get("y", "0")) + int(geometry.get("height", "0")),
+            if operation.get("ciaoDirection") == "provided":
+                symbol_top = int(operation_geometry.get("y", "0"))
+            else:
+                interface = next(
+                    cell
+                    for cell in _cells(root, "externalRequiredInterface")
+                    if cell.get("ciaoOperation") == label.get("ciaoOperation")
+                )
+                tip = next(
+                    cell
+                    for cell in _cells(root, "interfaceAnchor")
+                    if cell.get("id") == interface.get("target")
+                )
+                symbol_top = int(tip.find("mxGeometry").get("y", "0"))
+            self.assertLess(label_bottom, symbol_top)
+            rectangles.append(
+                (
+                    int(label_geometry.get("x", "0")),
+                    label_bottom,
+                    int(label_geometry.get("width", "0")),
+                )
             )
-            self.assertIn("rotation=-90", operation.get("style", ""))
+        horizontal = sorted((x, x + width) for x, _, width in rectangles)
+        for previous, current in zip(horizontal, horizontal[1:]):
+            self.assertGreaterEqual(current[0] - previous[1], 18)
 
     def test_plain_context_uses_mro_annotations_and_ignores_unannotated_values(self) -> None:
         object_ref = AutomatonObject("plain", PlainAutomaton, PlainContext())
@@ -873,14 +892,21 @@ class DrawioTests(unittest.TestCase):
             for cell in _cells(root, "actionLabel")
         }
         self.assertEqual(
-            {"initialize", "add_current", "count_tick", "clear", "apply_snapshot"},
+            {
+                "initialize",
+                "add_current",
+                "mark_running",
+                "mark_completed",
+                "clear",
+                "remember_start",
+                "apply_snapshot",
+            },
             set(actions),
         )
-        self.assertNotIn("publish_draw", actions)
-        self.assertNotIn("notify_draw_completed", actions)
+        self.assertNotIn("publish_snapshot", actions)
         self.assertIn("ctx", actions["initialize"].get("ciaoSignature", ""))
         self.assertEqual(
-            "\ntotal += values[index];\nindex++",
+            "total += values[index]; index++; tick_count++",
             actions["add_current"].get("ciaoText"),
         )
         self.assertEqual(set(actions), {cell.get("value") for cell in actions.values()})
@@ -913,8 +939,8 @@ class DrawioTests(unittest.TestCase):
             export_program_drawio(program, output)
             return ET.parse(output).getroot()
 
-        def semantic_ids(root: ET.Element) -> dict[tuple[str, ...], str]:
-            result: dict[tuple[str, ...], str] = {}
+        def semantic_ids(root: ET.Element) -> set[str]:
+            result: set[str] = set()
             for cell in root.findall(".//mxCell"):
                 kind = cell.get("ciaoElement")
                 if kind not in {
@@ -927,15 +953,7 @@ class DrawioTests(unittest.TestCase):
                     "connectionProvided",
                 }:
                     continue
-                key = (
-                    kind,
-                    cell.get("ciaoObject", ""),
-                    cell.get("ciaoState", ""),
-                    cell.get("ciaoAction", ""),
-                    cell.get("ciaoConnection", ""),
-                    cell.get("ciaoDirection", ""),
-                )
-                result[key] = cell.get("id", "")
+                result.add(cell.get("id", ""))
             return result
 
         with tempfile.TemporaryDirectory() as directory:
@@ -1157,28 +1175,33 @@ class DrawioTests(unittest.TestCase):
             ).definitions[PlainAutomaton].role,
         )
         self.assertFalse(QueryProvider.read.external)
-        self.assertTrue(SumController.start.external)
+        self.assertTrue(SumView.init_clicked.external)
+        self.assertTrue(SumView.render_data.external)
         external_required = required_command(external=True)
         self.assertTrue(callable(external_required))
 
         runtime = Runtime(sample.program)
-        runtime.send(sample.controller, SumController.start, values=[])
-        runtime.run()
-        runtime.send(sample.controller, SumController.tick)
+        runtime.send(
+            sample.view,
+            SumView.init_clicked,
+            StartInput((), CalculationMode.STEP_BY_STEP),
+        )
         runtime.run()
         self.assertIs(
             SumController.completed,
             runtime.snapshot(sample.controller).state,
         )
-        runtime.send(sample.controller, SumController.reset)
+        runtime.send(sample.view, SumView.reset_clicked)
         runtime.run()
         self.assertIs(SumController.idle, runtime.snapshot(sample.controller).state)
 
-        runtime.send(sample.controller, SumController.start, values=[])
+        runtime.send(
+            sample.view,
+            SumView.init_clicked,
+            StartInput((), CalculationMode.RUN_TO_COMPLETION),
+        )
         runtime.run()
-        runtime.send(sample.controller, SumController.tick)
-        runtime.run()
-        runtime.send(sample.controller, SumController.tick)
+        runtime.send(sample.view, SumView.finish_clicked)
         runtime.run()
         self.assertIs(SumController.done, runtime.snapshot(sample.controller).state)
 

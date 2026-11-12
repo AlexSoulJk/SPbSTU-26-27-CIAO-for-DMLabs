@@ -1,4 +1,4 @@
-"""DTO интерактивного сценария суммы массива."""
+"""DTO учебного примера суммы массива."""
 
 from __future__ import annotations
 
@@ -61,6 +61,11 @@ class StatusPresentation:
 
 
 __all__ = [
-    "CalculationMode", "ControlsPresentation", "DataPresentation", "SnapshotPhase",
-    "StartInput", "StatusPresentation", "SumSnapshot",
+    "CalculationMode",
+    "ControlsPresentation",
+    "DataPresentation",
+    "SnapshotPhase",
+    "StartInput",
+    "StatusPresentation",
+    "SumSnapshot",
 ]

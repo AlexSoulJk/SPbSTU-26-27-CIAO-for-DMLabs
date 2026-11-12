@@ -22,7 +22,7 @@ py -m venv .venv
 ## Headless-пример
 
 ```powershell
-.venv\Scripts\python -m examples.array_sum.array_sum
+.venv\Scripts\python -m examples.array_sum.headless_run
 ```
 
 Помимо результата команда печатает последовательную трассу операций runtime:
@@ -31,7 +31,7 @@ py -m venv .venv
 ## Tkinter-пример
 
 ```powershell
-.venv\Scripts\python -m examples.array_sum.array_sum_tk
+.venv\Scripts\python -m examples.array_sum.interactive_run
 ```
 
 Интерактивный пример поддерживает пошаговый и автоматический режимы. События
@@ -47,8 +47,8 @@ py -m venv .venv
 
 Команда использует ELK Layered и создаёт набор схем из фактических деклараций
 `Program` в
-`examples/schemas/generated_drawio`, включая новый
-`interactive_sum_program.drawio`. Для запуска необходимы Node.js и зависимости
+`examples/schemas/generated_drawio`, включая актуальный `sum_program.drawio`.
+Для запуска необходимы Node.js и зависимости
 из `package.json` (`npm install`). Публичный `export_program_drawio(...)`
 сохраняет baseline по умолчанию, а альтернативная стратегия передаётся явно
 через keyword-only параметр `layout_builder`.
@@ -65,8 +65,8 @@ py -m venv .venv
   payload и external-командами для обновления Window;
 - односторонний экспорт `Program → .drawio` с состояниями, переходами, интерфейсами и `Connection`.
 
-Старый пример в `examples/array_sum/automatos` и `program.py` сохранён как
-baseline для диаграмм. Интерактивный Controller/View/Window расположен в
-`examples/array_sum/interactive`; `array_sum_tk.py` является его GUI-точкой
-запуска, а `array_sum.py` сохраняет простой headless-запуск baseline.
+Пример суммы разделён на `automatos`, `ui`, общие DTO в `contracts.py` и единую
+сборку в `program.py`. Точки запуска называются `headless_run.py` и
+`interactive_run.py`; правила оформления остальных лабораторных примеров
+зафиксированы в `LAB_README.md`.
 Архитектурные документы и руководства расположены в `docs/`.

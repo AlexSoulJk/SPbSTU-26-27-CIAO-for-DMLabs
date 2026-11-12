@@ -7,16 +7,16 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from ciao import Runtime
-from examples.array_sum.interactive import (
+from examples.array_sum import (
     CalculationMode,
     ControlsPresentation,
     DataPresentation,
-    InteractiveSumController,
-    InteractiveSumView,
+    SumController,
+    SumView,
     SnapshotPhase,
     StartInput,
     StatusPresentation,
-    build_interactive_sample,
+    build_sample,
 )
 from ciao.visualization.drawio import export_program_drawio
 
@@ -36,18 +36,18 @@ class _Presentations:
 
 
 def _runtime_with_presentations():
-    sample = build_interactive_sample()
+    sample = build_sample()
     runtime = Runtime(sample.program)
     presentations = _Presentations()
     runtime.bind_external(
-        (sample.view, InteractiveSumView.render_data), presentations.render_data,
+        (sample.view, SumView.render_data), presentations.render_data,
     )
     runtime.bind_external(
-        (sample.view, InteractiveSumView.render_controls),
+        (sample.view, SumView.render_controls),
         presentations.render_controls,
     )
     runtime.bind_external(
-        (sample.view, InteractiveSumView.render_status), presentations.render_status,
+        (sample.view, SumView.render_status), presentations.render_status,
     )
     return sample, runtime, presentations
 
@@ -57,25 +57,25 @@ class InteractiveArraySumTests(unittest.TestCase):
         sample, runtime, presentations = _runtime_with_presentations()
         runtime.send(
             sample.view,
-            InteractiveSumView.init_clicked,
+            SumView.init_clicked,
             StartInput((2, 4, 6), CalculationMode.STEP_BY_STEP),
         )
         runtime.run()
         self.assertIs(
             runtime.snapshot(sample.controller).state,
-            InteractiveSumController.running_step,
+            SumController.running_step,
         )
-        self.assertIs(runtime.snapshot(sample.view).state, InteractiveSumView.step_ready)
+        self.assertIs(runtime.snapshot(sample.view).state, SumView.step_ready)
 
         for expected_index in (1, 2, 3):
-            runtime.send(sample.view, InteractiveSumView.next_clicked)
+            runtime.send(sample.view, SumView.next_clicked)
             runtime.run()
             self.assertEqual(expected_index, runtime.snapshot(sample.controller).index)
 
         controller = runtime.snapshot(sample.controller)
         view = runtime.snapshot(sample.view)
-        self.assertIs(controller.state, InteractiveSumController.completed)
-        self.assertIs(view.state, InteractiveSumView.completed)
+        self.assertIs(controller.state, SumController.completed)
+        self.assertIs(view.state, SumView.completed)
         self.assertEqual((12, 3, 3), (controller.total, controller.index, controller.tick_count))
         self.assertEqual(3, sum(event.operation == "tick" for event in runtime.trace))
 
@@ -103,14 +103,14 @@ class InteractiveArraySumTests(unittest.TestCase):
         sample, runtime, presentations = _runtime_with_presentations()
         runtime.send(
             sample.view,
-            InteractiveSumView.init_clicked,
+            SumView.init_clicked,
             StartInput((2, 4, 6), CalculationMode.RUN_TO_COMPLETION),
         )
         runtime.run()
 
         controller = runtime.snapshot(sample.controller)
-        self.assertIs(controller.state, InteractiveSumController.completed)
-        self.assertIs(runtime.snapshot(sample.view).state, InteractiveSumView.completed)
+        self.assertIs(controller.state, SumController.completed)
+        self.assertIs(runtime.snapshot(sample.view).state, SumView.completed)
         self.assertEqual((12, 3, 3), (controller.total, controller.index, controller.tick_count))
         self.assertEqual(3, sum(event.operation == "tick" for event in runtime.trace))
         self.assertEqual(1, sum(event.operation == "draw" for event in runtime.trace))
@@ -123,13 +123,13 @@ class InteractiveArraySumTests(unittest.TestCase):
                 sample, runtime, _ = _runtime_with_presentations()
                 runtime.send(
                     sample.view,
-                    InteractiveSumView.init_clicked,
+                    SumView.init_clicked,
                     StartInput((), mode),
                 )
                 runtime.run()
                 controller = runtime.snapshot(sample.controller)
-                self.assertIs(controller.state, InteractiveSumController.completed)
-                self.assertIs(runtime.snapshot(sample.view).state, InteractiveSumView.completed)
+                self.assertIs(controller.state, SumController.completed)
+                self.assertIs(runtime.snapshot(sample.view).state, SumView.completed)
                 self.assertEqual(
                     (0, 0, 0),
                     (controller.total, controller.index, controller.tick_count),
@@ -140,34 +140,34 @@ class InteractiveArraySumTests(unittest.TestCase):
         sample, runtime, _ = _runtime_with_presentations()
         runtime.send(
             sample.view,
-            InteractiveSumView.init_clicked,
+            SumView.init_clicked,
             StartInput((5,), CalculationMode.RUN_TO_COMPLETION),
         )
         runtime.run()
-        runtime.send(sample.view, InteractiveSumView.reset_clicked)
+        runtime.send(sample.view, SumView.reset_clicked)
         runtime.run()
-        self.assertIs(runtime.snapshot(sample.controller).state, InteractiveSumController.idle)
-        self.assertIs(runtime.snapshot(sample.view).state, InteractiveSumView.idle)
+        self.assertIs(runtime.snapshot(sample.controller).state, SumController.idle)
+        self.assertIs(runtime.snapshot(sample.view).state, SumView.idle)
 
         runtime.send(
             sample.view,
-            InteractiveSumView.init_clicked,
+            SumView.init_clicked,
             StartInput((7,), CalculationMode.STEP_BY_STEP),
         )
         runtime.run()
-        runtime.send(sample.view, InteractiveSumView.next_clicked)
+        runtime.send(sample.view, SumView.next_clicked)
         runtime.run()
-        runtime.send(sample.view, InteractiveSumView.finish_clicked)
+        runtime.send(sample.view, SumView.finish_clicked)
         runtime.run()
-        self.assertIs(runtime.snapshot(sample.controller).state, InteractiveSumController.done)
-        self.assertIs(runtime.snapshot(sample.view).state, InteractiveSumView.final)
+        self.assertIs(runtime.snapshot(sample.controller).state, SumController.done)
+        self.assertIs(runtime.snapshot(sample.view).state, SumView.final)
         self.assertEqual(
             ["finish_clicked", "finish", "render_controls", "render_status"],
             [event.operation for event in runtime.trace[-4:]],
         )
 
     def test_interactive_program_has_deterministic_drawio_export(self) -> None:
-        sample = build_interactive_sample()
+        sample = build_sample()
         with TemporaryDirectory() as directory:
             first = Path(directory) / "interactive-first.drawio"
             second = Path(directory) / "interactive-second.drawio"

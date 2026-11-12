@@ -532,6 +532,21 @@ def _append_elk_connections(
                 label_width,
                 label_height,
             )
+        # ELK иногда кладёт нижний пиксель подписи на невидимый junction.
+        # Подпись является отдельным объектом метрики, поэтому сохраняем
+        # детерминированный зазор вместо формального пересечения на 1 px.
+        connection_label_gap = 4
+        if label_geometry.y + label_geometry.height > (
+            junction_geometry.y - connection_label_gap
+        ):
+            label_geometry = replace(
+                label_geometry,
+                y=(
+                    junction_geometry.y
+                    - connection_label_gap
+                    - label_geometry.height
+                ),
+            )
         nodes.extend(
             (
                 NodeCell(

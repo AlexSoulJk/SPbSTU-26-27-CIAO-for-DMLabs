@@ -28,7 +28,6 @@ from ciao.visualization.drawio.layout_elk import (
 )
 from ciao.visualization.drawio.metrics import evaluate_layout
 from examples.array_sum.program import build_sample
-from examples.array_sum.interactive import build_interactive_sample
 from examples.calculator.program import build_calculator_program
 
 
@@ -131,6 +130,57 @@ def _assert_external_required_interfaces(
         testcase.assertEqual("required", metadata["ciaoDirection"])
 
 
+def _assert_external_operation_fence(
+    testcase: unittest.TestCase,
+    page: DiagramPage,
+) -> None:
+    """Проверяет подписи над external-ярлыками и горизонтальные зазоры."""
+
+    nodes = {node.id: node for node in page.nodes}
+    required_interfaces = {
+        edge.source_id: edge
+        for edge in page.edges
+        if edge.kind == "externalRequiredInterface"
+    }
+    items: list[tuple[int, int]] = []
+    external_operations = [
+        node
+        for node in page.nodes
+        if node.kind == "operation"
+        and dict(node.metadata).get("ciaoExternal") == "true"
+    ]
+    testcase.assertEqual(7, len(external_operations))
+    for operation in external_operations:
+        metadata = dict(operation.metadata)
+        label = nodes[f"{operation.id}-label"]
+        if metadata["ciaoDirection"] == "provided":
+            symbol_left = operation.geometry.x
+            symbol_right = operation.geometry.x + operation.geometry.width
+            symbol_top = operation.geometry.y
+            expected_gap = 6
+        else:
+            interface = required_interfaces[operation.id]
+            tip = nodes[interface.target_id]
+            center_x = operation.geometry.x + operation.geometry.width // 2
+            symbol_left = center_x - 8
+            symbol_right = center_x + 8
+            symbol_top = tip.geometry.y
+            expected_gap = 5
+        testcase.assertEqual(
+            expected_gap,
+            symbol_top - (label.geometry.y + label.geometry.height),
+        )
+        items.append(
+            (
+                min(symbol_left, label.geometry.x),
+                max(symbol_right, label.geometry.x + label.geometry.width),
+            )
+        )
+
+    for previous, current in zip(sorted(items), sorted(items)[1:]):
+        testcase.assertGreaterEqual(current[0] - previous[1], 18)
+
+
 class DrawioLayoutBenchmarkTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
@@ -153,16 +203,17 @@ class DrawioLayoutBenchmarkTests(unittest.TestCase):
         interfaces = [
             edge for edge in first.edges if edge.kind == "actionInterface"
         ]
-        self.assertEqual(5, len(interfaces))
+        self.assertEqual(7, len(interfaces))
         for interface in interfaces:
             self.assertIn("endArrow=halfCircle", interface.style)
             self.assertIn("strokeWidth=2.3", interface.style)
             self.assertNotIn("rotation=", interface.style)
         _assert_normalized_bottom_fence(self, self.description, first)
+        _assert_external_operation_fence(self, first)
 
     def test_multiphase_external_required_interface_has_fixed_leg(self) -> None:
         description = build_diagram(
-            compile_program(build_interactive_sample().program)
+            compile_program(build_sample().program)
         )
         _assert_external_required_interfaces(
             self,
@@ -218,11 +269,12 @@ class DrawioLayoutBenchmarkTests(unittest.TestCase):
         interfaces = [
             edge for edge in elk_page.edges if edge.kind == "actionInterface"
         ]
-        self.assertEqual(5, len(interfaces))
+        self.assertEqual(7, len(interfaces))
         _assert_normalized_bottom_fence(self, self.description, elk_page)
+        _assert_external_operation_fence(self, elk_page)
         controller = blocks[self.description.blocks[0].id]
-        self.assertLessEqual(controller.geometry.width, 1120)
-        self.assertLessEqual(elk_page.height, 750)
+        self.assertLessEqual(controller.geometry.width, 2000)
+        self.assertLessEqual(elk_page.height, 1100)
         node_indices = {
             node.id: index for index, node in enumerate(elk_page.nodes)
         }
@@ -274,7 +326,7 @@ class DrawioLayoutBenchmarkTests(unittest.TestCase):
     )
     def test_elk_external_required_interface_has_fixed_leg(self) -> None:
         description = build_diagram(
-            compile_program(build_interactive_sample().program)
+            compile_program(build_sample().program)
         )
         _assert_external_required_interfaces(
             self,

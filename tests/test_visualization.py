@@ -7,7 +7,7 @@ from typing import Any
 
 from ciao import Runtime, TraceEvent
 from ciao.visualization import TkTraceAdapter
-from examples.array_sum.automatos import SumController
+from examples.array_sum import CalculationMode, StartInput, SumView
 from examples.array_sum.program import build_sample
 
 
@@ -30,10 +30,14 @@ class VisualizationTests(unittest.TestCase):
         received: list[TraceEvent] = []
         TkTraceAdapter(root, runtime, received.append)  # type: ignore[arg-type]
 
-        runtime.send(sample.controller, SumController.start, values=[])
+        runtime.send(
+            sample.view,
+            SumView.init_clicked,
+            StartInput((), CalculationMode.STEP_BY_STEP),
+        )
         runtime.step()
 
         self.assertEqual(1, len(root.calls))
         self.assertEqual(0, root.calls[0][0])
         self.assertEqual(1, len(received))
-        self.assertEqual("start", received[0].operation)
+        self.assertEqual("init_clicked", received[0].operation)

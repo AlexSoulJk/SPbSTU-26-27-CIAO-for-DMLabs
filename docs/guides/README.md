@@ -120,13 +120,13 @@ def above_threshold(
 
 Для нескольких операций применяется `queries=(sensor_value, sensor_ready)` и параметр `queries: Queries`; конкретный запрос вызывается как `queries[self.sensor_value]()`. Query выполняется немедленно через настроенный `Connection`, не попадает в FIFO и не кэшируется. Capability нельзя сохранять для последующего использования. Контекст не содержит ссылку на Runtime и не предоставляет методов управления очередью. Полный небольшой пример расположен в [`examples/query_di.py`](../../examples/query_di.py).
 
-Исполняемый пример разделён по ответственности: автоматные классы находятся в [`examples/array_sum/automatos`](../../examples/array_sum/automatos), сборка объектов и соединений — в [`examples/array_sum/program.py`](../../examples/array_sum/program.py), а headless-запуск — в [`examples/array_sum/array_sum.py`](../../examples/array_sum/array_sum.py). Headless-сценарий печатает не только результат, но и последовательную трассу операций, переходов и отправленных сообщений.
+Исполняемый пример разделён по ответственности: автоматные классы находятся в [`examples/array_sum/automatos`](../../examples/array_sum/automatos), Window — в [`examples/array_sum/ui`](../../examples/array_sum/ui), общие DTO — в `contracts.py`, а сборка объектов и соединений — в [`examples/array_sum/program.py`](../../examples/array_sum/program.py). `headless_run.py` и `interactive_run.py` запускают одну и ту же программу.
 
-В актуальном примере Controller находится в `running`, пока ожидает пользовательский `tick`. Обычный Guard проверяет только наличие текущего элемента: при успехе элемент прибавляется к сумме и Controller переходит в `publishing`; когда Guard ложен, ветвь `otherwise` переводит его в `completed`. В состоянии `publishing` он ожидает команду `draw_completed` от View. View посылает её после применения снимка, поэтому возврат в `running` происходит через FIFO автоматически и не требует второго нажатия кнопки. В `completed` пользователь выбирает `reset` для возврата в `idle` либо отдельный завершающий `tick` для перехода в `done`.
+Controller различает `running_step` и `running_all`. Каждый `tick` обрабатывает ровно один элемент. Пошаговый режим публикует промежуточные снимки, автоматический планирует следующий `tick` через self-connection и публикует только итог. Последний вычислительный тик сразу создаёт `COMPLETED`, поэтому дополнительного пустого тика нет. View подтверждает каждый опубликованный снимок командой `draw_completed`; `reset` возвращает оба автомата в `idle`, а явный `finish` переводит их в финальные состояния.
 
 `StepResult.transition` и `TraceEvent.transition` содержат имя выбранного class-атрибута перехода. До выбора ветви, для пустого шага и `IGNORED` используется `None`; если исключение возникло внутри Action, имя уже выбранной ветви сохраняется.
 
-Tkinter-пример при запуске сначала показывает настоящее начальное состояние `idle`. Кнопка `Init` отправляет команду `start`; после перехода в `running` она исчезает, а на её месте появляется кнопка «Следующий шаг», отправляющая пользовательскую команду `tick`. В `completed` вместо неё показываются кнопки `Reset` и `Finish`. Общий адаптер событий находится в `ciao.visualization`, а конкретное представление этого примера — в `examples.array_sum.ui`.
+Tkinter-пример при запуске показывает начальное состояние `idle`. Кнопка `Init` отправляет `StartInput` в View, а View уже маршрутизирует `start` Controller. В пошаговом режиме появляется кнопка «Следующий шаг»; в автоматическом Controller продвигается сам. Window не читает Runtime snapshot: данные, кнопки и статус приходят отдельными external required-командами View.
 
 ## Экспорт в draw.io
 
@@ -141,7 +141,7 @@ path = export_program_drawio(sample.program, "sum_program.drawio")
 print(path)
 ```
 
-Каталог назначения должен существовать. Повторный вызов атомарно заменяет прежний файл. Операция `start`, объявленная через `@provided_command(external=True)`, отображается самостоятельным внешним lollipop над блоком. Начало автомата показано отдельной чёрной точкой Entry и стрелкой к начальному State; final-состояние — отдельным Exit с подписью. Видимые команды подписываются без типов и служебных `self`/`ctx`, например `start(values)`, `tick()` и `reset()`.
+Каталог назначения должен существовать. Повторный вызов атомарно заменяет прежний файл. External provided-команды View отображаются lollipop, external required-команды — фиксированной ножкой с подковой. Их подписи находятся над символами и участвуют в детерминированном расчёте горизонтальных зазоров. Начало автомата показано отдельной чёрной точкой Entry, final-состояние — Exit с подписью.
 
 Операции из `Program.connections` отображаются в промежутке между автоматами как socket+ball: половина required завершается `halfCircle`, половина provided — `oval`, а над общим узлом остаётся только имя операции. В примере видны подписи `draw` и `draw_completed`. Полные сигнатуры операций остаются в `ciaoSignature`. Query endpoint получает пометку `«query»`, а обе половины Query connection и её подпись окрашиваются в красный без добавления стрелки направления. Несколько связей между одной парой блоков выходят из разных точек и используют разнесённые полосы.
 
@@ -219,9 +219,9 @@ ELK выполняет два прохода: сначала по внутрен
 py -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -e ".[dev]"
 .\.venv\Scripts\python.exe -m pytest
-.\.venv\Scripts\python.exe -m examples.array_sum.array_sum
+.\.venv\Scripts\python.exe -m examples.array_sum.headless_run
 .\.venv\Scripts\python.exe examples\query_di.py
-.\.venv\Scripts\python.exe -m examples.array_sum.array_sum_tk
+.\.venv\Scripts\python.exe -m examples.array_sum.interactive_run
 .\.venv\Scripts\python.exe examples\export_drawio.py
 .\.venv\Scripts\python.exe -m examples.benchmark_drawio_layouts
 npm install

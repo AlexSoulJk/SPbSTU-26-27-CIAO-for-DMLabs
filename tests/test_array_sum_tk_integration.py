@@ -8,15 +8,15 @@ from threading import get_ident
 from time import monotonic, sleep
 
 from ciao import Runtime
-from examples.array_sum.array_sum_tk import _bind_window
-from examples.array_sum.interactive import (
+from examples.array_sum.interactive_run import _bind_window
+from examples.array_sum import (
     CalculationMode,
-    InteractiveSumController,
-    InteractiveSumView,
+    SumController,
+    SumView,
     StatusPresentation,
-    build_interactive_sample,
+    build_sample,
 )
-from examples.array_sum.interactive.window import ArraySumWindow
+from examples.array_sum.ui import ArraySumWindow
 
 
 class _RecordingWindow(ArraySumWindow):
@@ -41,7 +41,7 @@ class ArraySumTkIntegrationTests(unittest.TestCase):
         root.withdraw()
         connection = None
         try:
-            sample = build_interactive_sample()
+            sample = build_sample()
             runtime = Runtime(sample.program)
             window = _RecordingWindow(root)
             connection = _bind_window(root, runtime, sample, window)
@@ -57,16 +57,16 @@ class ArraySumTkIntegrationTests(unittest.TestCase):
                 if (
                     runtime.pending_messages == 0
                     and runtime.snapshot(sample.controller).state
-                    is InteractiveSumController.completed
+                    is SumController.completed
                 ):
                     break
                 sleep(0.001)
 
             controller = runtime.snapshot(sample.controller)
-            self.assertIs(controller.state, InteractiveSumController.completed)
+            self.assertIs(controller.state, SumController.completed)
             self.assertIs(
                 runtime.snapshot(sample.view).state,
-                InteractiveSumView.completed,
+                SumView.completed,
             )
             self.assertEqual((12, 3), (controller.total, controller.tick_count))
             self.assertTrue(window.handler_threads)

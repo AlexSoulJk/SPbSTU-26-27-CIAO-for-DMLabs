@@ -1,8 +1,7 @@
-"""Controller учебного примера пошагового суммирования массива."""
+"""Controller учебного примера суммы массива."""
 
 from __future__ import annotations
 
-from collections.abc import Sequence
 from dataclasses import dataclass, field
 
 from ciao import (
@@ -17,146 +16,190 @@ from ciao import (
     transition,
 )
 
+from ..contracts import CalculationMode, SnapshotPhase, StartInput, SumSnapshot
+
 
 @dataclass
 class SumContext(AutomatonContext):
-    """Локальные данные одного исполняемого экземпляра контроллера."""
+    """Вычислительные данные и назначение ожидаемого подтверждения View."""
 
     values: list[int] = field(default_factory=list)
+    mode: CalculationMode = CalculationMode.STEP_BY_STEP
     index: int = 0
     total: int = 0
     tick_count: int = 0
+    pending_phase: SnapshotPhase = SnapshotPhase.IDLE
 
 
 class SumController(ControllerAutomaton[SumContext]):
-    """Пошагово вычисляет сумму и публикует снимки для представления."""
+    """Вычисляет сумму по одному элементу на каждый переход ``tick``."""
 
     idle = State(initial=True)
-    running = State()
+    running_step = State()
+    running_all = State()
     publishing = State()
     completed = State()
     done = State(final=True)
 
-    @provided_command(external=True)
-    def start(self, values: Sequence[int]) -> None:
-        ...
+    @provided_command
+    def start(self, request: StartInput) -> None: ...
 
     @provided_command
-    def tick(self) -> None:
-        ...
+    def tick(self) -> None: ...
 
     @provided_command
-    def reset(self) -> None:
-        ...
+    def reset(self) -> None: ...
 
     @provided_command
-    def draw_completed(self) -> None:
-        """Подтверждает обработку опубликованного снимка представлением."""
+    def finish(self) -> None: ...
 
-        ...
+    @provided_command
+    def draw_completed(self) -> None: ...
 
-    @required_command
-    def draw(
-        self,
-        values: tuple[int, ...],
-        index: int,
-        total: int,
-        tick_count: int,
-    ) -> None:
-        ...
+    @required_command(text="публикует доменный снимок")
+    def draw(self, snapshot: SumSnapshot) -> None: ...
 
-    @guard(text="\nindex < len(values)")
-    def has_current(self, ctx: SumContext) -> bool:
-        """Проверяет, что текущий индекс всё ещё указывает на элемент."""
+    @required_command(text="планирует следующий вычислительный шаг")
+    def continue_run(self) -> None: ...
 
-        return not self._is_out_of_bounds(ctx)
+    @guard(text="values пуст")
+    def empty_request(self, ctx: SumContext, request: StartInput) -> bool:
+        return not request.values
 
-    @staticmethod
-    def _is_out_of_bounds(ctx: SumContext) -> bool:
-        """Задаёт единственное бинарное условие развилки в ``running``."""
+    @guard(text="режим пошаговый")
+    def step_request(self, ctx: SumContext, request: StartInput) -> bool:
+        return bool(request.values) and request.mode is CalculationMode.STEP_BY_STEP
 
-        return ctx.index >= len(ctx.values)
+    @guard(text="после текущего есть следующий элемент")
+    def has_more_after_current(self, ctx: SumContext) -> bool:
+        return ctx.index + 1 < len(ctx.values)
+
+    @guard(text="ожидается продолжение пошагового режима")
+    def pending_running(self, ctx: SumContext) -> bool:
+        return ctx.pending_phase is SnapshotPhase.RUNNING
+
+    @guard(text="ожидается завершение")
+    def pending_completed(self, ctx: SumContext) -> bool:
+        return ctx.pending_phase is SnapshotPhase.COMPLETED
 
     @action
-    def initialize(
-        self,
-        ctx: SumContext,
-        values: Sequence[int],
-    ) -> None:
-        ctx.values = list(values)
-        ctx.index = 0
-        ctx.total = 0
-        ctx.tick_count = 0
+    def initialize(self, ctx: SumContext, request: StartInput) -> None:
+        ctx.values = list(request.values)
+        ctx.mode = request.mode
+        ctx.index = ctx.total = ctx.tick_count = 0
+        ctx.pending_phase = SnapshotPhase.IDLE
 
-    @action(text="\ntotal += values[index];\nindex++")
+    @action(text="total += values[index]; index++; tick_count++")
     def add_current(self, ctx: SumContext) -> None:
-        # Guard выбранного перехода гарантирует допустимость индекса.
+        # Доступность элемента гарантируют start-развилка и инвариант running-*.
         ctx.total += ctx.values[ctx.index]
         ctx.index += 1
-
-    @action(text="\ntick_count++")
-    def count_tick(self, ctx: SumContext) -> None:
         ctx.tick_count += 1
 
-    @action(emit=draw, text="\nпубликует снимок для представления")
-    def publish_draw(self, ctx: SumContext, emit: Emit) -> None:
-        # Capability привязан к draw, а runtime помещает команду в FIFO
-        # только после успешного выполнения всего перехода.
-        emit(
-            values=tuple(ctx.values),
-            index=ctx.index,
-            total=ctx.total,
-            tick_count=ctx.tick_count,
-        )
+    @action
+    def mark_running(self, ctx: SumContext) -> None:
+        ctx.pending_phase = SnapshotPhase.RUNNING
 
-    @action(text="clear all context values")
+    @action
+    def mark_completed(self, ctx: SumContext) -> None:
+        ctx.pending_phase = SnapshotPhase.COMPLETED
+
+    @action
     def clear(self, ctx: SumContext) -> None:
         ctx.values.clear()
-        ctx.index = 0
-        ctx.total = 0
-        ctx.tick_count = 0
+        ctx.index = ctx.total = ctx.tick_count = 0
+        ctx.pending_phase = SnapshotPhase.IDLE
 
-    on_start = transition(
+    @action(emit=draw)
+    def publish_snapshot(self, ctx: SumContext, emit: Emit) -> None:
+        emit(
+            SumSnapshot(
+                tuple(ctx.values),
+                ctx.index,
+                ctx.total,
+                ctx.tick_count,
+                ctx.pending_phase,
+            )
+        )
+
+    @action(emit=continue_run)
+    def schedule_next(self, ctx: SumContext, emit: Emit) -> None:
+        emit()
+
+    on_empty_start = transition(
         source=idle,
         event=start,
-        actions=(initialize,),
-        target=running,
-    )
-
-    on_tick_with_current_element = transition(
-        source=running,
-        event=tick,
-        guard=has_current,
-        actions=(add_current, count_tick, publish_draw),
+        guard=empty_request,
+        actions=(initialize, mark_completed, publish_snapshot),
         target=publishing,
     )
-
-    on_tick_when_complete = transition(
-        source=running,
+    on_step_start = transition(
+        source=idle,
+        event=start,
+        guard=step_request,
+        actions=(initialize,),
+        target=running_step,
+    )
+    on_automatic_start = transition(
+        source=idle,
+        event=start,
+        otherwise=True,
+        actions=(initialize, schedule_next),
+        target=running_all,
+    )
+    on_step_tick = transition(
+        source=running_step,
+        event=tick,
+        guard=has_more_after_current,
+        actions=(add_current, mark_running, publish_snapshot),
+        target=publishing,
+    )
+    on_last_step_tick = transition(
+        source=running_step,
         event=tick,
         otherwise=True,
-        actions=(),
-        target=completed,
+        actions=(add_current, mark_completed, publish_snapshot),
+        target=publishing,
     )
-
-    on_draw_completed = transition(
+    on_automatic_tick = transition(
+        source=running_all,
+        event=tick,
+        guard=has_more_after_current,
+        actions=(add_current, schedule_next),
+        target=running_all,
+    )
+    on_last_automatic_tick = transition(
+        source=running_all,
+        event=tick,
+        otherwise=True,
+        actions=(add_current, mark_completed, publish_snapshot),
+        target=publishing,
+    )
+    on_running_draw_completed = transition(
         source=publishing,
         event=draw_completed,
-        target=running,
+        guard=pending_running,
+        target=running_step,
     )
-
+    on_completed_draw_completed = transition(
+        source=publishing,
+        event=draw_completed,
+        guard=pending_completed,
+        target=completed,
+    )
+    on_idle_draw_completed = transition(
+        source=publishing,
+        event=draw_completed,
+        otherwise=True,
+        target=idle,
+    )
     on_reset = transition(
         source=completed,
         event=reset,
-        actions=(clear,),
-        target=idle,
+        actions=(clear, publish_snapshot),
+        target=publishing,
     )
-
-    on_finish = transition(
-        source=completed,
-        event=tick,
-        target=done,
-    )
+    on_finish = transition(source=completed, event=finish, target=done)
 
 
 __all__ = ["SumContext", "SumController"]

@@ -1,4 +1,4 @@
-"""Сборка декларативной программы примера суммы массива."""
+"""Сборка программы учебного примера суммы массива."""
 
 from __future__ import annotations
 
@@ -11,41 +11,35 @@ from .automatos import SumContext, SumController, SumView, ViewContext
 
 @dataclass(frozen=True)
 class Sample:
-    """Программа и адресуемые объекты, необходимые сценариям запуска."""
-
     program: Program
     controller: AutomatonObject
     view: AutomatonObject
 
 
 def build_sample() -> Sample:
-    """Создаёт два объекта и явные соединения их операций."""
+    """Создаёт Controller/View, включая self-connection автоматического режима."""
 
-    controller = AutomatonObject(
-        name="controller",
-        automaton=SumController,
-        initial_context=SumContext(),
-    )
-    view = AutomatonObject(
-        name="view",
-        automaton=SumView,
-        initial_context=ViewContext(),
-    )
-
+    controller = AutomatonObject("controller", SumController, SumContext())
+    view = AutomatonObject("view", SumView, ViewContext())
     program = Program(
         objects=(controller, view),
         connections=(
+            Connection((view, SumView.start), (controller, SumController.start)),
+            Connection((view, SumView.tick), (controller, SumController.tick)),
+            Connection((view, SumView.reset), (controller, SumController.reset)),
+            Connection((view, SumView.finish), (controller, SumController.finish)),
+            Connection((controller, SumController.draw), (view, SumView.draw)),
             Connection(
-                required=(controller, SumController.draw),
-                provided=(view, SumView.draw),
+                (view, SumView.draw_completed),
+                (controller, SumController.draw_completed),
             ),
             Connection(
-                required=(view, SumView.draw_completed),
-                provided=(controller, SumController.draw_completed),
+                (controller, SumController.continue_run),
+                (controller, SumController.tick),
             ),
         ),
     )
-    return Sample(program=program, controller=controller, view=view)
+    return Sample(program, controller, view)
 
 
 __all__ = ["Sample", "build_sample"]

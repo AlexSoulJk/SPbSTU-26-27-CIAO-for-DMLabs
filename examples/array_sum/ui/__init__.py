@@ -1,5 +1,5 @@
 """Tkinter-компоненты, специфичные для примера суммы массива."""
 
-from .array_sum_view import ArraySumView
+from .array_sum_window import ArraySumWindow
 
-__all__ = ["ArraySumView"]
+__all__ = ["ArraySumWindow"]

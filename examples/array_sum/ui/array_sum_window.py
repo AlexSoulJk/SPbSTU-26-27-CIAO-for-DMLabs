@@ -1,4 +1,4 @@
-"""Tkinter Window интерактивного ArraySum без доступа к Runtime."""
+"""Tkinter Window примера суммы массива без доступа к Runtime."""
 
 from __future__ import annotations
 
@@ -7,8 +7,11 @@ from tkinter import messagebox, ttk
 
 from ciao.visualization import BaseWindow, UIErrorInfo
 
-from .contracts import (
-    CalculationMode, ControlsPresentation, DataPresentation, StartInput,
+from ..contracts import (
+    CalculationMode,
+    ControlsPresentation,
+    DataPresentation,
+    StartInput,
     StatusPresentation,
 )
 
@@ -29,7 +32,10 @@ class ArraySumWindow(ttk.Frame, BaseWindow):
         self.values_entry.grid(row=0, column=1, padx=8, sticky="ew")
 
         ttk.Label(input_frame, text="Режим:").grid(row=1, column=0, sticky="w")
-        self._mode = tk.StringVar(master=self, value=CalculationMode.STEP_BY_STEP.value)
+        self._mode = tk.StringVar(
+            master=self,
+            value=CalculationMode.STEP_BY_STEP.value,
+        )
         self.mode_box = ttk.Combobox(
             input_frame,
             state="readonly",
@@ -52,7 +58,12 @@ class ArraySumWindow(ttk.Frame, BaseWindow):
         self.reset_button = ttk.Button(controls, text="Reset")
         self.finish_button = ttk.Button(controls, text="Finish")
         for column, button in enumerate(
-            (self.init_button, self.next_button, self.reset_button, self.finish_button)
+            (
+                self.init_button,
+                self.next_button,
+                self.reset_button,
+                self.finish_button,
+            )
         ):
             button.grid(row=0, column=column, padx=4)
 
@@ -76,17 +87,27 @@ class ArraySumWindow(ttk.Frame, BaseWindow):
         ]
         self._array.configure(text="[" + ", ".join(rendered) + "]")
         self._details.configure(
-            text=(f"Сумма: {presentation.total}; индекс: {presentation.index}; "
-                  f"tick: {presentation.tick_count}")
+            text=(
+                f"Сумма: {presentation.total}; индекс: {presentation.index}; "
+                f"tick: {presentation.tick_count}"
+            )
         )
 
     def render_controls(self, presentation: ControlsPresentation) -> None:
         self._set_button(self.init_button, presentation.show_init, True)
-        self._set_button(self.next_button, presentation.show_next, presentation.next_enabled)
+        self._set_button(
+            self.next_button,
+            presentation.show_next,
+            presentation.next_enabled,
+        )
         self._set_button(self.reset_button, presentation.show_reset, True)
         self._set_button(self.finish_button, presentation.show_finish, True)
-        self.values_entry.configure(state="normal" if presentation.mode_enabled else "disabled")
-        self.mode_box.configure(state="readonly" if presentation.mode_enabled else "disabled")
+        self.values_entry.configure(
+            state="normal" if presentation.mode_enabled else "disabled"
+        )
+        self.mode_box.configure(
+            state="readonly" if presentation.mode_enabled else "disabled"
+        )
 
     def render_status(self, presentation: StatusPresentation) -> None:
         self._status.configure(text=presentation.text)
@@ -96,7 +117,10 @@ class ArraySumWindow(ttk.Frame, BaseWindow):
 
     @staticmethod
     def _set_button(button: ttk.Button, visible: bool, enabled: bool) -> None:
-        button.grid() if visible else button.grid_remove()
+        if visible:
+            button.grid()
+        else:
+            button.grid_remove()
         button.state(["!disabled"] if enabled else ["disabled"])
 
 

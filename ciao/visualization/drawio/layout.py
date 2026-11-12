@@ -50,6 +50,10 @@ ACTION_INTERFACE_WIDTH = 16
 ACTION_INTERFACE_HEIGHT = 24
 ACTION_INTERFACE_ANCHOR_SIZE = 2
 BOTTOM_LABEL_HEIGHT = 24
+EXTERNAL_ITEM_GAP = 18
+EXTERNAL_LABEL_GAP = 6
+EXTERNAL_MARGIN_X = 20
+EXTERNAL_PROVIDED_HEIGHT = 40
 COMPACT_CHAR_WIDTH = 6
 DECISION_SIZE = 40
 DECISION_CLEARANCE = 60
@@ -704,6 +708,23 @@ def _measure_block(
     bottom_width = sum(fence_widths)
     bottom_width += max(0, len(fence_widths) - 1) * BOTTOM_ITEM_GAP
 
+    external_operations = [
+        item for item in block.operations if item.operation.external
+    ]
+    external_widths = [
+        max(
+            operation_sizes[item.id][0],
+            (
+                ENDPOINT_SIZE
+                if item.operation.direction is OperationDirection.PROVIDED
+                else ACTION_INTERFACE_WIDTH
+            ),
+        )
+        for item in external_operations
+    ]
+    external_width = sum(external_widths)
+    external_width += max(0, len(external_widths) - 1) * EXTERNAL_ITEM_GAP
+
     width = _round_up(
         max(
             650,
@@ -712,6 +733,7 @@ def _measure_block(
             + graph_width
             + GRAPH_RIGHT_MARGIN,
             2 * BOTTOM_MARGIN_X + bottom_width,
+            2 * EXTERNAL_MARGIN_X + external_width,
         ),
         5,
     )
@@ -1149,34 +1171,71 @@ def _layout_block(
         bottom_obstacles.extend((label_geometry, operation_geometry))
         cursor_x = label_geometry.x + label_geometry.width + BOTTOM_ITEM_GAP
 
-    for index, operation_view in enumerate(external_operations):
-        count = len(external_operations)
-        initial_geometries = [
-            state_geometries[item.state]
-            for item in block.states
-            if item.state.initial
+    external_item_widths = [
+        max(
+            measurements.operation_sizes[item.id][0],
+            (
+                ENDPOINT_SIZE
+                if item.operation.direction is OperationDirection.PROVIDED
+                else ACTION_INTERFACE_WIDTH
+            ),
+        )
+        for item in external_operations
+    ]
+    external_group_width = sum(external_item_widths)
+    external_group_width += max(
+        0,
+        len(external_item_widths) - 1,
+    ) * EXTERNAL_ITEM_GAP
+    initial_geometries = [
+        state_geometries[item.state]
+        for item in block.states
+        if item.state.initial
+    ]
+    preferred_center_x = (
+        _center(initial_geometries[0]).x + 47
+        if initial_geometries
+        else block_geometry.x + block_geometry.width // 2
+    )
+    minimum_x = block_geometry.x + EXTERNAL_MARGIN_X
+    maximum_x = (
+        block_geometry.x
+        + block_geometry.width
+        - EXTERNAL_MARGIN_X
+        - external_group_width
+    )
+    external_cursor_x = min(
+        maximum_x,
+        max(minimum_x, preferred_center_x - external_group_width // 2),
+    )
+    for operation_view, item_width in zip(
+        external_operations,
+        external_item_widths,
+    ):
+        label_width, label_height = measurements.operation_sizes[
+            operation_view.id
         ]
-        if initial_geometries:
-            # Внешний lollipop относится к входу автомата, поэтому привязываем
-            # группу к начальному состоянию, а не к геометрическому центру рамки.
-            initial_center_x = _center(initial_geometries[0]).x
-            center_x = (
-                initial_center_x
-                + 47
-                + round((index - (count - 1) / 2) * 90)
-            )
-        else:
-            available = block_geometry.width - 260
-            center_x = (
-                block_geometry.x
-                + 130
-                + available * (2 * index + 1) // (2 * count)
-            )
+        center_x = external_cursor_x + item_width // 2
+        symbol_height = (
+            EXTERNAL_PROVIDED_HEIGHT
+            if operation_view.operation.direction is OperationDirection.PROVIDED
+            else ACTION_INTERFACE_HEIGHT
+        )
+        label_geometry = Rect(
+            center_x - label_width // 2,
+            block_geometry.y
+            - symbol_height
+            - EXTERNAL_LABEL_GAP
+            - label_height,
+            label_width,
+            label_height,
+        )
         operation_geometries[operation_view.id] = (
             Rect(center_x - 20, block_geometry.y - 40, 40, 40),
             "external",
-            Rect(0, 0, 0, 0),
+            label_geometry,
         )
+        external_cursor_x += item_width + EXTERNAL_ITEM_GAP
 
     visible_operations = [
         operation_view
@@ -1275,15 +1334,7 @@ def _layout_block(
                 )
             )
         display_label = _visible_operation_label(operation_view)
-        label_geometry = (
-            _operation_label_geometry(
-                symbol_geometry,
-                side,
-                measurements.operation_sizes[operation_view.id],
-            )
-            if side == "external"
-            else prepared_label_geometry
-        )
+        label_geometry = prepared_label_geometry
         nodes.append(
             NodeCell(
                 id=f"{operation_view.id}-label",
@@ -1298,6 +1349,7 @@ def _layout_block(
                 metadata=(
                     ("ciaoOperation", operation.name),
                     ("ciaoDirection", operation.direction.value),
+                    ("ciaoExternal", str(operation.external).lower()),
                     *_operation_text_metadata(operation),
                 ),
             )

@@ -6,10 +6,20 @@ from pathlib import Path
 
 from ciao.visualization.drawio import export_program_drawio
 from ciao.visualization.drawio.layout_elk import layout_diagram_elk
-from array_sum.program import build_sample as build_mock_sample
-from array_sum.interactive import build_interactive_sample
-from query_di import build_sample as build_query_sample
-from calculator.program import build_calculator_program as build_calculator_sample
+
+# Скрипт поддерживает запуск и как файла, и как модуля пакета examples.
+if __package__:
+    from .array_sum.program import build_sample as build_array_sum_sample
+    from .calculator.program import (
+        build_calculator_program as build_calculator_sample,
+    )
+    from .query_di import build_sample as build_query_sample
+else:
+    from array_sum.program import build_sample as build_array_sum_sample
+    from calculator.program import (
+        build_calculator_program as build_calculator_sample,
+    )
+    from query_di import build_sample as build_query_sample
 
 
 def main() -> None:
@@ -19,13 +29,8 @@ def main() -> None:
     output_directory.mkdir(parents=True, exist_ok=True)
     outputs = [
         export_program_drawio(
-            build_mock_sample().program,
+            build_array_sum_sample().program,
             output_directory / "sum_program.drawio",
-            layout_builder=layout_diagram_elk,
-        ),
-        export_program_drawio(
-            build_interactive_sample().program,
-            output_directory / "interactive_sum_program.drawio",
             layout_builder=layout_diagram_elk,
         ),
         export_program_drawio(

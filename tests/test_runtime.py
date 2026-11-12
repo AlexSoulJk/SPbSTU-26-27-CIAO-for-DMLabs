@@ -30,7 +30,7 @@ from ciao import (
     required_query,
     transition,
 )
-from examples.array_sum.array_sum import (
+from examples.array_sum.headless_run import (
     calculate_sum,
     format_operation_trace,
     run_calculation,
@@ -41,6 +41,7 @@ from examples.array_sum.automatos import (
     SumView,
     ViewContext,
 )
+from examples.array_sum.contracts import CalculationMode, StartInput
 from examples.array_sum.program import build_sample
 
 
@@ -282,13 +283,25 @@ class RuntimeTests(unittest.TestCase):
         result = run_calculation([2])
 
         self.assertEqual(
-            ["start", "tick", "draw", "draw_completed", "tick", "tick"],
+            [
+                "init_clicked",
+                "start",
+                "render_data",
+                "render_controls",
+                "render_status",
+                "tick",
+                "draw",
+                "render_data",
+                "render_controls",
+                "render_status",
+                "draw_completed",
+            ],
             [event.operation for event in result.trace],
         )
         rendered = format_operation_trace(result.trace)
-        self.assertIn("controller.start(values=(2,))", rendered)
+        self.assertIn("view.init_clicked(request=StartInput", rendered)
         self.assertIn(
-            "running --on_tick_with_current_element--> publishing",
+            "running_all --on_last_automatic_tick--> publishing",
             rendered,
         )
         self.assertIn("emit -> view.draw(", rendered)
@@ -299,9 +312,13 @@ class RuntimeTests(unittest.TestCase):
         first = Runtime(sample.program)
         second = Runtime(sample.program)
 
-        first.send(sample.controller, SumController.start, values=[5])
+        first.send(
+            sample.view,
+            SumView.init_clicked,
+            StartInput((5,), CalculationMode.STEP_BY_STEP),
+        )
         first.run()
-        first.send(sample.controller, SumController.tick)
+        first.send(sample.view, SumView.next_clicked)
         first.run()
 
         self.assertEqual(5, first.snapshot(sample.controller).total)
@@ -311,9 +328,16 @@ class RuntimeTests(unittest.TestCase):
     def test_emitted_command_is_processed_after_current_transition(self) -> None:
         sample = build_sample()
         runtime = Runtime(sample.program)
-        runtime.send(sample.controller, SumController.start, values=[3])
+        runtime.send(
+            sample.view,
+            SumView.init_clicked,
+            StartInput((3,), CalculationMode.STEP_BY_STEP),
+        )
         runtime.run()
-        runtime.send(sample.controller, SumController.tick)
+        runtime.send(sample.view, SumView.next_clicked)
+
+        request_step = runtime.step()
+        self.assertEqual("next_clicked", request_step.operation)
 
         controller_step = runtime.step()
         self.assertEqual(StepStatus.PROCESSED, controller_step.status)
@@ -324,19 +348,25 @@ class RuntimeTests(unittest.TestCase):
             runtime.snapshot(sample.controller).state,
         )
 
+        # controls/status команды Next уже находились перед draw в общей FIFO.
+        runtime.step()
+        runtime.step()
         view_step = runtime.step()
         self.assertEqual("draw", view_step.operation)
-        self.assertEqual(1, len(view_step.emitted))
+        self.assertEqual(4, len(view_step.emitted))
         self.assertEqual(3, runtime.snapshot(sample.view).total)
         self.assertIs(
             SumController.publishing,
             runtime.snapshot(sample.controller).state,
         )
 
+        runtime.step()
+        runtime.step()
+        runtime.step()
         acknowledgement_step = runtime.step()
         self.assertEqual("draw_completed", acknowledgement_step.operation)
         self.assertIs(
-            SumController.running,
+            SumController.completed,
             runtime.snapshot(sample.controller).state,
         )
 
@@ -394,12 +424,13 @@ class RuntimeTests(unittest.TestCase):
     def test_run_reports_limit_in_non_strict_mode(self) -> None:
         sample = build_sample()
         runtime = Runtime(sample.program, strict=False)
-        runtime.send(sample.controller, SumController.start, values=[])
-        runtime.send(sample.controller, SumController.start, values=[])
+        request = StartInput((), CalculationMode.STEP_BY_STEP)
+        runtime.send(sample.view, SumView.init_clicked, request)
+        runtime.send(sample.view, SumView.init_clicked, request)
 
         result = runtime.run(max_steps=1)
         self.assertEqual(RunStatus.LIMIT_REACHED, result.status)
-        self.assertEqual(1, runtime.pending_messages)
+        self.assertEqual(5, runtime.pending_messages)
 
     def test_action_failure_keeps_state_and_discards_buffer(self) -> None:
         sender = AutomatonObject("sender", FailingSender, FailingContext())
@@ -430,14 +461,20 @@ class RuntimeTests(unittest.TestCase):
         runtime = Runtime(sample.program)
         events = []
         runtime.subscribe(events.append)
-        runtime.send(sample.controller, SumController.start, values=[])
+        runtime.send(
+            sample.view,
+            SumView.init_clicked,
+            StartInput((), CalculationMode.STEP_BY_STEP),
+        )
         runtime.step()
 
         self.assertEqual(1, len(events))
         with self.assertRaises(TypeError):
-            events[0].parameters["values"] = [1]
-        with self.assertRaises(TypeError):
-            events[0].parameters["values"][0] = 1
+            events[0].parameters["request"] = StartInput(
+                (1,),
+                CalculationMode.STEP_BY_STEP,
+            )
+        self.assertEqual((), events[0].parameters["request"].values)
 
     def test_connection_translates_different_parameter_names(self) -> None:
         sender = AutomatonObject("sender", RenamedSender, RenamedSenderContext())
@@ -480,7 +517,11 @@ class RuntimeTests(unittest.TestCase):
     def test_run_raises_on_limit_in_strict_mode(self) -> None:
         sample = build_sample()
         runtime = Runtime(sample.program)
-        runtime.send(sample.controller, SumController.start, values=[])
+        runtime.send(
+            sample.view,
+            SumView.init_clicked,
+            StartInput((), CalculationMode.STEP_BY_STEP),
+        )
         with self.assertRaises(StepLimitExceeded):
             runtime.run(max_steps=0)
 

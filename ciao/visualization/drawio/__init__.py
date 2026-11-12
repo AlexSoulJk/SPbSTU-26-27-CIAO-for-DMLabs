@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import tempfile
+from collections.abc import Callable
 from os import PathLike
 from pathlib import Path
 
@@ -11,12 +12,28 @@ from ciao.domain import Program
 from ciao.infrastructure import compile_program
 
 from .builder import build_diagram
+from .diagram_model import DiagramDescription, DiagramPage
 from .layout import layout_diagram
 from .writer import serialize_drawio
 
 
-def export_program_drawio(program: Program, output: str | PathLike[str]) -> Path:
-    """Проверяет программу и атомарно экспортирует её в ``.drawio``."""
+LayoutBuilder = Callable[[DiagramDescription], DiagramPage]
+
+
+def export_program_drawio(
+    program: Program,
+    output: str | PathLike[str],
+    *,
+    layout_builder: LayoutBuilder = layout_diagram,
+) -> Path:
+    """Проверяет программу и атомарно экспортирует её в ``.drawio``.
+
+    По умолчанию сохраняется стабильная baseline-компоновка. Экспериментальную
+    стратегию, например ELK, вызывающая сторона передаёт явно.
+    """
+
+    if not callable(layout_builder):
+        raise TypeError("layout_builder должен быть callable")
 
     output_path = Path(output)
     parent = output_path.parent
@@ -27,7 +44,7 @@ def export_program_drawio(program: Program, output: str | PathLike[str]) -> Path
     # модель и не создаёт параллельную систему валидации деклараций.
     compiled = compile_program(program)
     description = build_diagram(compiled)
-    page = layout_diagram(description)
+    page = layout_builder(description)
     content = serialize_drawio(page)
 
     descriptor, temporary_name = tempfile.mkstemp(
@@ -48,4 +65,4 @@ def export_program_drawio(program: Program, output: str | PathLike[str]) -> Path
     return output_path
 
 
-__all__ = ["export_program_drawio"]
+__all__ = ["LayoutBuilder", "export_program_drawio"]

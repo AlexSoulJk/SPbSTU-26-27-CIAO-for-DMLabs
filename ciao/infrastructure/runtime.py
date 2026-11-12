@@ -6,11 +6,13 @@ from collections import deque
 from copy import deepcopy
 from dataclasses import dataclass, field
 from enum import Enum
-from inspect import Parameter, signature
-from types import MappingProxyType
-from typing import Any, Callable, Mapping
+from functools import partial
+from inspect import Parameter, _empty, isfunction, ismethod, signature
+from threading import Lock, get_ident
+from types import MappingProxyType, NoneType
+from typing import Any, Callable, Mapping, get_type_hints
 
-from ciao.domain.connections import Endpoint
+from ciao.domain.connections import Endpoint, EndpointLike
 from ciao.domain.emission import Emit, Emits, _create_emission_scope
 from ciao.domain.model import (
     Automaton,
@@ -28,20 +30,27 @@ from .compiler import (
     ActionInjectionPlan,
     AutomatonDefinition,
     CompiledProgram,
+    OperationSignature,
     QueryInjectionPlan,
     compile_program,
 )
 from .errors import (
     ActionExecutionError,
     AmbiguousTransitionError,
+    ExternalBindingConflictError,
+    ExternalHandlerExecutionError,
+    ExternalHandlerSignatureError,
     GuardExecutionError,
     InvalidRuntimeCallError,
     NoTransitionError,
     QueryExecutionError,
     QueryRoutingError,
     RuntimeExecutionError,
+    RuntimeReentryError,
+    RuntimeThreadAffinityError,
     StepLimitExceeded,
 )
+from .lifecycle import Subscription
 
 
 class StepStatus(str, Enum):
@@ -144,6 +153,27 @@ class _Message:
     parameters: Mapping[str, Any]
 
 
+@dataclass(frozen=True)
+class _ExternalDelivery:
+    source: Endpoint
+    parameters: Mapping[str, Any]
+
+
+_QueueMessage = _Message | _ExternalDelivery
+
+
+@dataclass(frozen=True)
+class _ExternalBinding:
+    callback: Callable[..., Any]
+    positional_names: tuple[str, ...]
+    keyword_names: tuple[str, ...]
+
+
+@dataclass(frozen=True, eq=False)
+class _ListenerRegistration:
+    callback: Callable[[TraceEvent], None]
+
+
 @dataclass
 class _RuntimeObject:
     definition: AutomatonDefinition
@@ -157,7 +187,7 @@ class _ExecutionFrame:
     object_ref: AutomatonObject
     context: AutomatonContext
     phase: str
-    pending: list[_Message]
+    pending: list[_QueueMessage]
 
 
 class Runtime:
@@ -168,13 +198,23 @@ class Runtime:
     def __init__(self, program: Program, *, strict: bool = True) -> None:
         self.strict = strict
         self._compiled: CompiledProgram = compile_program(program)
-        self._queue: deque[_Message] = deque()
+        self._queue: deque[_QueueMessage] = deque()
         self._objects: dict[AutomatonObject, _RuntimeObject] = {}
         self._trace: list[TraceEvent] = []
-        self._listeners: list[Callable[[TraceEvent], None]] = []
+        self._listeners: list[_ListenerRegistration] = []
+        self._external_handlers: dict[Endpoint, _ExternalBinding] = {}
         self._step_number = 0
         self._active_frame: _ExecutionFrame | None = None
         self._query_stack: list[Endpoint] = []
+        self._queue_lock = Lock()
+        self._trace_lock = Lock()
+        self._registry_lock = Lock()
+        self._execution_lock = Lock()
+        self._execution_state_lock = Lock()
+        self._execution_owner: int | None = None
+        self._execution_phase: str | None = None
+        self._affinity_thread: int | None = None
+        self._affinity_leases = 0
 
         for object_ref in program.objects:
             definition = self._compiled.definitions[object_ref.automaton]
@@ -188,26 +228,82 @@ class Runtime:
 
     @property
     def pending_messages(self) -> int:
-        return len(self._queue)
+        with self._queue_lock:
+            return len(self._queue)
 
     @property
     def trace(self) -> tuple[TraceEvent, ...]:
-        return tuple(self._trace)
+        with self._trace_lock:
+            return tuple(self._trace)
 
-    def subscribe(self, listener: Callable[[TraceEvent], None]) -> None:
+    def subscribe(self, listener: Callable[[TraceEvent], None]) -> Subscription:
         """Регистрирует обработчик неизменяемых событий трассы."""
 
-        self._listeners.append(listener)
+        if not callable(listener):
+            raise TypeError("listener должен быть callable")
+        registration = _ListenerRegistration(listener)
+        with self._registry_lock:
+            self._listeners.append(registration)
+
+        def dispose() -> None:
+            with self._registry_lock:
+                if registration in self._listeners:
+                    self._listeners.remove(registration)
+
+        return Subscription(dispose)
+
+    def bind_external(
+        self,
+        endpoint: EndpointLike,
+        callback: Callable[..., Any],
+    ) -> Subscription:
+        """Регистрирует единственный handler external required-команды."""
+
+        normalized = self._normalize_endpoint(endpoint)
+        operation = normalized.operation
+        if not (
+            operation.kind is OperationKind.COMMAND
+            and operation.direction is OperationDirection.REQUIRED
+            and operation.external
+        ):
+            raise InvalidRuntimeCallError(
+                "bind_external принимает только external required-команду"
+            )
+        if not callable(callback):
+            raise ExternalHandlerSignatureError("external handler должен быть callable")
+
+        runtime_object = self._object(normalized.object)
+        operation_signature = runtime_object.definition.operation_signatures[operation]
+        binding = self._compile_external_binding(
+            normalized,
+            operation_signature,
+            callback,
+        )
+        with self._registry_lock:
+            if normalized in self._external_handlers:
+                raise ExternalBindingConflictError(
+                    f"Для {normalized.object.name}.{operation.name} уже задан handler"
+                )
+            self._external_handlers[normalized] = binding
+
+        def dispose() -> None:
+            with self._registry_lock:
+                if self._external_handlers.get(normalized) is binding:
+                    del self._external_handlers[normalized]
+
+        return Subscription(dispose)
 
     def snapshot(self, object_ref: AutomatonObject) -> AutomatonSnapshot[Any]:
         """Возвращает отсоединённую копию контекста и текущее состояние."""
 
-        runtime_object = self._object(object_ref)
-        return AutomatonSnapshot(
-            object_name=object_ref.name,
-            state=runtime_object.state,
-            context=deepcopy(runtime_object.context),
-        )
+        self._ensure_not_execution_owner("snapshot")
+        with self._execution_lock:
+            runtime_object = self._object(object_ref)
+            return AutomatonSnapshot(
+                object_name=object_ref.name,
+                state=runtime_object.state,
+                context=deepcopy(runtime_object.context),
+            )
 
     def send(
         self,
@@ -226,7 +322,10 @@ class Runtime:
         ):
             raise InvalidRuntimeCallError("send принимает только provided-команду")
         parameters = operation.bind_payload(*args, **kwargs)
-        self._queue.append(_Message(target, operation, _message_mapping(parameters)))
+        with self._queue_lock:
+            self._queue.append(
+                _Message(target, operation, _message_mapping(parameters))
+            )
 
     def _emit_from_capability(
         self,
@@ -247,8 +346,17 @@ class Runtime:
         ):
             raise InvalidRuntimeCallError("emit принимает только required-команду")
         self._ensure_endpoint_owner(frame.object_ref, operation)
-        target = self._route(frame.object_ref, operation)
         parameters = operation.bind_payload(*args, **kwargs)
+        if operation.external:
+            frame.pending.append(
+                _ExternalDelivery(
+                    Endpoint(frame.object_ref, operation),
+                    _message_mapping(parameters),
+                )
+            )
+            return
+
+        target = self._route(frame.object_ref, operation)
         target_parameters = self._translate_parameters(
             operation,
             target.operation,
@@ -328,7 +436,7 @@ class Runtime:
         try:
             try:
                 return self._invoke_query(target, parameters)
-            except (QueryExecutionError, QueryRoutingError):
+            except (QueryExecutionError, QueryRoutingError, RuntimeReentryError):
                 raise
             except Exception as error:
                 source_name = (
@@ -344,15 +452,30 @@ class Runtime:
             self._query_stack.pop()
 
     def step(self) -> StepResult:
+        """Сериализованно обрабатывает ровно одно сообщение FIFO."""
+
+        self._begin_execution("step")
+        try:
+            return self._step_impl()
+        finally:
+            self._end_execution()
+
+    def _step_impl(self) -> StepResult:
         """Обрабатывает ровно одно сообщение FIFO."""
 
-        if not self._queue:
-            return StepResult(step_number=self._step_number, status=StepStatus.EMPTY)
+        with self._queue_lock:
+            if not self._queue:
+                return StepResult(
+                    step_number=self._step_number,
+                    status=StepStatus.EMPTY,
+                )
+            message = self._queue.popleft()
+        self._step_number += 1
+        if isinstance(message, _ExternalDelivery):
+            return self._deliver_external(message)
 
-        message = self._queue.popleft()
         runtime_object = self._object(message.target)
         source_state = runtime_object.state
-        self._step_number += 1
 
         matching = tuple(
             item
@@ -399,6 +522,9 @@ class Runtime:
                 finally:
                     if query_capability is not None:
                         query_capability._ciao_invalidate()
+            except RuntimeReentryError as error:
+                self._record_error(message, source_state, error)
+                raise
             except Exception as error:
                 wrapped = GuardExecutionError(
                     f"Ошибка Guard {item.guard.qualified_name}: {error}"
@@ -479,6 +605,14 @@ class Runtime:
                         emission_capability._ciao_invalidate()
                     if query_capability is not None:
                         query_capability._ciao_invalidate()
+        except RuntimeReentryError as error:
+            self._record_error(
+                message,
+                source_state,
+                error,
+                transition=selected.name,
+            )
+            raise
         except Exception as error:
             wrapped = ActionExecutionError(
                 f"Ошибка Action в переходе {selected.qualified_name}: {error}"
@@ -494,7 +628,8 @@ class Runtime:
             self._active_frame = None
 
         runtime_object.state = selected.target
-        self._queue.extend(frame.pending)
+        with self._queue_lock:
+            self._queue.extend(frame.pending)
         emitted = tuple(self._message_info(item) for item in frame.pending)
         result = StepResult(
             step_number=self._step_number,
@@ -515,22 +650,121 @@ class Runtime:
 
         if max_steps is not None and max_steps < 0:
             raise ValueError("max_steps не может быть отрицательным")
-        results: list[StepResult] = []
-        while self._queue:
-            if max_steps is not None and len(results) >= max_steps:
-                if self.strict:
-                    raise StepLimitExceeded(
-                        f"Достигнут предел run: {max_steps} шагов"
+        self._begin_execution("run")
+        try:
+            results: list[StepResult] = []
+            while self._has_pending_messages():
+                if max_steps is not None and len(results) >= max_steps:
+                    if self.strict:
+                        raise StepLimitExceeded(
+                            f"Достигнут предел run: {max_steps} шагов"
+                        )
+                    return RunResult(RunStatus.LIMIT_REACHED, tuple(results))
+                results.append(self._step_impl())
+            return RunResult(RunStatus.COMPLETED, tuple(results))
+        finally:
+            self._end_execution()
+
+    def _has_pending_messages(self) -> bool:
+        with self._queue_lock:
+            return bool(self._queue)
+
+    def _begin_execution(self, phase: str) -> None:
+        current_thread = get_ident()
+        with self._execution_state_lock:
+            if self._execution_owner == current_thread:
+                raise RuntimeReentryError(
+                    f"Runtime.{phase} нельзя вызывать из активного "
+                    f"{self._execution_phase}"
+                )
+            affinity = self._affinity_thread
+        if affinity is not None and affinity != current_thread:
+            raise RuntimeThreadAffinityError(
+                "Runtime закреплён за другим потоком исполнения"
+            )
+
+        self._execution_lock.acquire()
+        try:
+            with self._execution_state_lock:
+                # Affinity могла быть установлена, пока поток ожидал executor.
+                affinity = self._affinity_thread
+                if affinity is not None and affinity != current_thread:
+                    raise RuntimeThreadAffinityError(
+                        "Runtime закреплён за другим потоком исполнения"
                     )
-                return RunResult(RunStatus.LIMIT_REACHED, tuple(results))
-            results.append(self.step())
-        return RunResult(RunStatus.COMPLETED, tuple(results))
+                self._execution_owner = current_thread
+                self._execution_phase = phase
+        except Exception:
+            self._execution_lock.release()
+            raise
+
+    def _end_execution(self) -> None:
+        with self._execution_state_lock:
+            self._execution_owner = None
+            self._execution_phase = None
+        self._execution_lock.release()
+
+    def _ensure_not_execution_owner(self, operation: str) -> None:
+        with self._execution_state_lock:
+            if self._execution_owner == get_ident():
+                raise RuntimeReentryError(
+                    f"Runtime.{operation} нельзя вызывать из активного шага"
+                )
+
+    def _acquire_thread_affinity(self) -> Subscription:
+        """Закрепляет executor за текущим потоком на срок жизни подключения."""
+
+        current_thread = get_ident()
+        with self._execution_state_lock:
+            if (
+                self._affinity_thread is not None
+                and self._affinity_thread != current_thread
+            ):
+                raise RuntimeThreadAffinityError(
+                    "Runtime уже закреплён за другим потоком"
+                )
+            self._affinity_thread = current_thread
+            self._affinity_leases += 1
+        released = False
+
+        def dispose() -> None:
+            nonlocal released
+            with self._execution_state_lock:
+                if released:
+                    return
+                released = True
+                self._affinity_leases -= 1
+                if self._affinity_leases == 0:
+                    self._affinity_thread = None
+
+        return Subscription(dispose)
 
     def _object(self, object_ref: AutomatonObject) -> _RuntimeObject:
         try:
             return self._objects[object_ref]
         except KeyError as error:
             raise InvalidRuntimeCallError("Объект не принадлежит этому Runtime") from error
+
+    def _normalize_endpoint(self, endpoint: EndpointLike) -> Endpoint:
+        if isinstance(endpoint, Endpoint):
+            normalized = endpoint
+        else:
+            try:
+                object_ref, operation = endpoint
+            except (TypeError, ValueError) as error:
+                raise InvalidRuntimeCallError(
+                    "endpoint должен быть Endpoint или парой (object, operation)"
+                ) from error
+            normalized = Endpoint(object_ref, operation)
+
+        runtime_object = self._object(normalized.object)
+        self._ensure_endpoint_owner(normalized.object, normalized.operation)
+        if normalized.operation not in runtime_object.definition.operations:
+            raise InvalidRuntimeCallError(
+                f"Операция {normalized.operation.qualified_name} не объявлена "
+                f"у {normalized.object.name}"
+            )
+        return normalized
 
     @staticmethod
     def _ensure_endpoint_owner(object_ref: AutomatonObject, operation: Operation) -> None:
@@ -630,6 +864,153 @@ class Runtime:
             arguments.append(runtime_object.context)
         return endpoint.operation.function(*arguments, **dict(parameters))
 
+    def _deliver_external(self, message: _ExternalDelivery) -> StepResult:
+        """Обрабатывает одну внешнюю доставку как самостоятельный шаг FIFO."""
+
+        runtime_object = self._object(message.source.object)
+        state = runtime_object.state
+        with self._registry_lock:
+            binding = self._external_handlers.get(message.source)
+        if binding is not None:
+            args = tuple(
+                message.parameters[name] for name in binding.positional_names
+            )
+            kwargs = {
+                name: message.parameters[name] for name in binding.keyword_names
+            }
+            try:
+                binding.callback(*args, **kwargs)
+            except RuntimeReentryError as error:
+                self._record_external_error(message, state, error)
+                raise
+            except Exception as error:
+                wrapped = ExternalHandlerExecutionError(
+                    "Ошибка external handler для "
+                    f"{message.source.object.name}.{message.source.operation.name}: "
+                    f"{error}"
+                )
+                self._record_external_error(message, state, wrapped)
+                raise wrapped from error
+
+        result = StepResult(
+            step_number=self._step_number,
+            status=StepStatus.PROCESSED,
+            object_name=message.source.object.name,
+            operation=message.source.operation.name,
+            source_state=state.name,
+            target_state=state.name,
+            parameters=_frozen_mapping(message.parameters),
+        )
+        self._record_trace(result)
+        return result
+
+    @staticmethod
+    def _external_handler_hints(callback: Callable[..., Any]) -> dict[str, Any]:
+        base = callback.func if isinstance(callback, partial) else callback
+        target: Any
+        if isfunction(base) or ismethod(base):
+            target = base
+        else:
+            target = base.__call__
+        try:
+            return get_type_hints(target)
+        except Exception as error:
+            raise ExternalHandlerSignatureError(
+                f"Не удалось разрешить аннотации external handler: {error}"
+            ) from error
+
+    @classmethod
+    def _compile_external_binding(
+        cls,
+        endpoint: Endpoint,
+        operation_signature: OperationSignature,
+        callback: Callable[..., Any],
+    ) -> _ExternalBinding:
+        """Один раз проверяет handler и сохраняет готовый план его вызова."""
+
+        try:
+            handler_signature = signature(callback)
+        except (TypeError, ValueError) as error:
+            raise ExternalHandlerSignatureError(
+                f"Не удалось получить сигнатуру external handler: {error}"
+            ) from error
+        hints = cls._external_handler_hints(callback)
+        handler_parameters = tuple(handler_signature.parameters.values())
+        unsupported = tuple(
+            parameter
+            for parameter in handler_parameters
+            if parameter.kind
+            in (
+                Parameter.POSITIONAL_ONLY,
+                Parameter.VAR_POSITIONAL,
+                Parameter.VAR_KEYWORD,
+            )
+        )
+        if unsupported:
+            names = ", ".join(parameter.name for parameter in unsupported)
+            raise ExternalHandlerSignatureError(
+                f"{endpoint.object.name}.{endpoint.operation.name}: "
+                f"неподдерживаемые параметры handler: {names}"
+            )
+        operation_parameters = operation_signature.parameters
+        if len(handler_parameters) != len(operation_parameters):
+            raise ExternalHandlerSignatureError(
+                f"{endpoint.object.name}.{endpoint.operation.name}: handler принимает "
+                f"{len(handler_parameters)} параметров вместо {len(operation_parameters)}"
+            )
+
+        positional_names: list[str] = []
+        keyword_names: list[str] = []
+        for operation_parameter, handler_parameter in zip(
+            operation_parameters,
+            handler_parameters,
+            strict=True,
+        ):
+            if handler_parameter.kind is not operation_parameter.kind:
+                raise ExternalHandlerSignatureError(
+                    f"{endpoint.object.name}.{endpoint.operation.name}: вид параметра "
+                    f"{handler_parameter.name!r} несовместим с "
+                    f"{operation_parameter.name!r}"
+                )
+            if handler_parameter.kind is Parameter.KEYWORD_ONLY:
+                if handler_parameter.name != operation_parameter.name:
+                    raise ExternalHandlerSignatureError(
+                        f"{endpoint.object.name}.{endpoint.operation.name}: имя "
+                        f"keyword-only параметра должно быть "
+                        f"{operation_parameter.name!r}"
+                    )
+                keyword_names.append(operation_parameter.name)
+            else:
+                positional_names.append(operation_parameter.name)
+
+            handler_type = hints.get(
+                handler_parameter.name,
+                handler_parameter.annotation,
+            )
+            operation_type = operation_parameter.annotation
+            if (
+                handler_type is not _empty
+                and operation_type is not _empty
+                and handler_type != operation_type
+            ):
+                raise ExternalHandlerSignatureError(
+                    f"{endpoint.object.name}.{endpoint.operation.name}: тип параметра "
+                    f"{handler_parameter.name!r} несовместим с "
+                    f"{operation_parameter.name!r}"
+                )
+
+        return_type = hints.get("return", handler_signature.return_annotation)
+        if return_type not in (_empty, None, NoneType):
+            raise ExternalHandlerSignatureError(
+                f"{endpoint.object.name}.{endpoint.operation.name}: handler должен "
+                "возвращать None"
+            )
+        return _ExternalBinding(
+            callback=callback,
+            positional_names=tuple(positional_names),
+            keyword_names=tuple(keyword_names),
+        )
+
     def _record_ignored(
         self,
         message: _Message,
@@ -670,6 +1051,24 @@ class Runtime:
         )
         self._record_trace(result)
 
+    def _record_external_error(
+        self,
+        message: _ExternalDelivery,
+        state: State,
+        error: Exception,
+    ) -> None:
+        result = StepResult(
+            step_number=self._step_number,
+            status=StepStatus.ERROR,
+            object_name=message.source.object.name,
+            operation=message.source.operation.name,
+            source_state=state.name,
+            target_state=state.name,
+            parameters=_frozen_mapping(message.parameters),
+            error=str(error),
+        )
+        self._record_trace(result)
+
     def _record_trace(self, result: StepResult) -> None:
         if result.object_name is None or result.operation is None:
             return
@@ -686,12 +1085,21 @@ class Runtime:
             emitted=result.emitted,
             error=result.error,
         )
-        self._trace.append(event)
-        for listener in tuple(self._listeners):
-            listener(event)
+        with self._trace_lock:
+            self._trace.append(event)
+        with self._registry_lock:
+            listeners = tuple(self._listeners)
+        for registration in listeners:
+            registration.callback(event)
 
     @staticmethod
-    def _message_info(message: _Message) -> EmittedMessage:
+    def _message_info(message: _QueueMessage) -> EmittedMessage:
+        if isinstance(message, _ExternalDelivery):
+            return EmittedMessage(
+                target="<external>",
+                operation=message.source.operation.name,
+                parameters=_frozen_mapping(message.parameters),
+            )
         return EmittedMessage(
             target=message.target.name,
             operation=message.operation.name,

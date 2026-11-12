@@ -34,6 +34,7 @@ from ciao import (
     transition,
 )
 from ciao.visualization.drawio import export_program_drawio
+from ciao.visualization.drawio.layout import layout_diagram
 from examples.array_sum.automatos import SumController, SumView
 from examples.array_sum.program import build_sample
 from examples.calculator.program import build_calculator_program
@@ -1103,6 +1104,24 @@ class DrawioTests(unittest.TestCase):
             export_program_drawio(sample.program, second)
             self.assertEqual(first.read_bytes(), second.read_bytes())
 
+    def test_export_accepts_explicit_layout_builder(self) -> None:
+        sample = build_sample()
+        descriptions = []
+
+        def layout_builder(description):
+            descriptions.append(description)
+            return layout_diagram(description)
+
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "custom-layout.drawio"
+            export_program_drawio(
+                sample.program,
+                output,
+                layout_builder=layout_builder,
+            )
+
+        self.assertEqual(1, len(descriptions))
+
     def test_serialization_error_preserves_existing_file(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             output = Path(directory) / "sample.drawio"
@@ -1139,8 +1158,8 @@ class DrawioTests(unittest.TestCase):
         )
         self.assertFalse(QueryProvider.read.external)
         self.assertTrue(SumController.start.external)
-        with self.assertRaises(TypeError):
-            required_command(external=True)  # type: ignore[call-arg]
+        external_required = required_command(external=True)
+        self.assertTrue(callable(external_required))
 
         runtime = Runtime(sample.program)
         runtime.send(sample.controller, SumController.start, values=[])

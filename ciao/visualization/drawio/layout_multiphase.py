@@ -12,7 +12,7 @@ from dataclasses import dataclass, replace
 from html import escape
 from math import ceil, sqrt
 
-from ciao.domain import OperationKind
+from ciao.domain import OperationDirection, OperationKind
 
 from . import styles
 from .diagram_model import (
@@ -256,6 +256,12 @@ def _compose_block(
         operation.id for operation in block.operations if operation.operation.external
     }
     external_label_ids = {f"{item}-label" for item in external_operation_ids}
+    external_interface_tip_ids = {
+        f"{operation.id}-interface-tip"
+        for operation in block.operations
+        if operation.operation.external
+        and operation.operation.direction is OperationDirection.REQUIRED
+    }
     nodes: list[NodeCell] = []
     geometries: dict[str, Rect] = {}
     for node in raw_nodes:
@@ -270,7 +276,11 @@ def _compose_block(
                 plan.x_scale,
                 plan.y_scale,
             )
-        elif node.id in external_operation_ids | external_label_ids:
+        elif node.id in (
+            external_operation_ids
+            | external_label_ids
+            | external_interface_tip_ids
+        ):
             mapped_external = _map_rectangle(
                 node_geometry, graph_origin, plan.x_scale, 1.0
             )

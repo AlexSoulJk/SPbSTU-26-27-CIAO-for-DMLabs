@@ -28,6 +28,7 @@ from ciao.visualization.drawio.layout_elk import (
 )
 from ciao.visualization.drawio.metrics import evaluate_layout
 from examples.array_sum.program import build_sample
+from examples.array_sum.interactive import build_interactive_sample
 from examples.calculator.program import build_calculator_program
 
 
@@ -103,6 +104,33 @@ def _assert_normalized_bottom_fence(
             )
 
 
+def _assert_external_required_interfaces(
+    testcase: unittest.TestCase,
+    page: DiagramPage,
+) -> None:
+    """Проверяет фиксированную ножку и неповорачиваемую подкову external required."""
+
+    nodes = {node.id: node for node in page.nodes}
+    interfaces = [
+        edge for edge in page.edges if edge.kind == "externalRequiredInterface"
+    ]
+    testcase.assertEqual(3, len(interfaces))
+    for interface in interfaces:
+        base = nodes[interface.source_id]
+        tip = nodes[interface.target_id]
+        base_center_x = base.geometry.x + base.geometry.width // 2
+        tip_center_x = tip.geometry.x + tip.geometry.width // 2
+        base_center_y = base.geometry.y + base.geometry.height // 2
+        tip_center_y = tip.geometry.y + tip.geometry.height // 2
+        testcase.assertEqual(base_center_x, tip_center_x)
+        testcase.assertEqual(24, base_center_y - tip_center_y)
+        testcase.assertIn("endArrow=halfCircle", interface.style)
+        testcase.assertNotIn("rotation=", interface.style)
+        metadata = dict(base.metadata)
+        testcase.assertEqual("true", metadata["ciaoExternal"])
+        testcase.assertEqual("required", metadata["ciaoDirection"])
+
+
 class DrawioLayoutBenchmarkTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
@@ -131,6 +159,15 @@ class DrawioLayoutBenchmarkTests(unittest.TestCase):
             self.assertIn("strokeWidth=2.3", interface.style)
             self.assertNotIn("rotation=", interface.style)
         _assert_normalized_bottom_fence(self, self.description, first)
+
+    def test_multiphase_external_required_interface_has_fixed_leg(self) -> None:
+        description = build_diagram(
+            compile_program(build_interactive_sample().program)
+        )
+        _assert_external_required_interfaces(
+            self,
+            layout_diagram_multiphase(description),
+        )
 
     def test_benchmark_uses_the_same_metric_for_both_strategies(self) -> None:
         result, baseline, multiphase = benchmark_layouts(self.description)
@@ -230,6 +267,19 @@ class DrawioLayoutBenchmarkTests(unittest.TestCase):
         self.assertIn("classify_token(&#8230;)", compact.label)
         self.assertNotIn("Есть необработанный", compact.label)
         self.assertIn("Есть необработанный", metadata["ciaoFullLabel"])
+
+    @unittest.skipUnless(
+        shutil.which("node") is not None and Path("node_modules/elkjs").exists(),
+        "для интеграционной проверки требуется npm install",
+    )
+    def test_elk_external_required_interface_has_fixed_leg(self) -> None:
+        description = build_diagram(
+            compile_program(build_interactive_sample().program)
+        )
+        _assert_external_required_interfaces(
+            self,
+            layout_diagram_elk(description),
+        )
 
     def test_edge_overlap_is_normalized_by_total_arrow_length(self) -> None:
         nodes = (

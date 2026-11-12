@@ -16,7 +16,7 @@ from math import ceil, hypot
 from pathlib import Path
 from typing import Any
 
-from ciao.domain import OperationKind
+from ciao.domain import OperationDirection, OperationKind
 
 from . import styles
 from .diagram_model import (
@@ -126,6 +126,11 @@ def _block_node_ids(block: AutomatonView, template: DiagramPage) -> set[str]:
         )
     for operation in block.operations:
         identifiers.update((operation.id, f"{operation.id}-label"))
+        if (
+            operation.operation.external
+            and operation.operation.direction is OperationDirection.REQUIRED
+        ):
+            identifiers.add(f"{operation.id}-interface-tip")
     identifiers.update(
         node.id
         for node in template.nodes
@@ -629,10 +634,14 @@ def _translate_template_node(
             x=geometry.x + dx,
             y=geometry.y + dy + (height_growth if bottom_anchored else 0),
         )
-        if geometry.y < new_block.y and node.kind in {
-            "operation",
-            "operationLabel",
-        }:
+        is_external_required_anchor = (
+            node.kind == "operation" and node.style == styles.INTERFACE_ANCHOR
+        )
+        if (
+            geometry.y < new_block.y
+            and node.kind in {"operation", "operationLabel"}
+            and not is_external_required_anchor
+        ):
             # Внешний endpoint обязан лишь касаться верхней рамки. Округление
             # высоты подписи не должно заводить её внутрь context-card на 1 px.
             geometry = replace(
@@ -766,7 +775,7 @@ def _layout_block_nodes(
     result_edges.extend(
         edge
         for edge in template.edges
-        if edge.kind == "actionInterface"
+        if edge.kind in {"actionInterface", "externalRequiredInterface"}
         and edge.source_id in owned_ids
         and edge.target_id in owned_ids
     )

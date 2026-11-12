@@ -1,4 +1,4 @@
-"""Tkinter-визуализация пошагового примера суммы массива."""
+"""Tkinter-запуск интерактивного сценария ArraySum через CIAO bindings."""
 
 from __future__ import annotations
 
@@ -6,92 +6,76 @@ import sys
 import tkinter as tk
 from pathlib import Path
 
-# При прямом запуске файла Python добавляет в sys.path только каталог array_sum,
-# поэтому корневые пакеты ciao и examples недоступны. Запуск через ``-m`` уже
-# содержит корень проекта и в корректировке пути не нуждается.
 if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from ciao import Runtime
-from ciao.visualization import TkTraceAdapter
+from ciao import FactoryPayloadSource, Runtime
+from ciao.visualization.tkinter_connection import TkConnection
 
-from examples.array_sum.automatos import SumController
-from examples.array_sum.program import build_sample
-from examples.array_sum.ui import ArraySumView
+from examples.array_sum.interactive import (
+    InteractiveSample,
+    InteractiveSumView,
+    StartInput,
+    build_interactive_sample,
+)
+from examples.array_sum.interactive.window import ArraySumWindow
+
+
+def _bind_window(
+    root: tk.Misc,
+    runtime: Runtime,
+    sample: InteractiveSample,
+    window: ArraySumWindow,
+) -> TkConnection:
+    """Создаёт все UI-привязки одной конфигурации запуска примера."""
+
+    connection = TkConnection(root, runtime, window)
+    connection.bind_event(
+        window.init_button,
+        (sample.view, InteractiveSumView.init_clicked),
+        payload_source=FactoryPayloadSource(StartInput, window.read_start_input),
+    )
+    connection.bind_event(
+        window.next_button,
+        (sample.view, InteractiveSumView.next_clicked),
+    )
+    connection.bind_event(
+        window.reset_button,
+        (sample.view, InteractiveSumView.reset_clicked),
+    )
+    connection.bind_event(
+        window.finish_button,
+        (sample.view, InteractiveSumView.finish_clicked),
+    )
+    connection.bind_command(
+        (sample.view, InteractiveSumView.render_data),
+        window.render_data,
+    )
+    connection.bind_command(
+        (sample.view, InteractiveSumView.render_controls),
+        window.render_controls,
+    )
+    connection.bind_command(
+        (sample.view, InteractiveSumView.render_status),
+        window.render_status,
+    )
+    return connection
 
 
 def main() -> None:
-    values = [2, 4, 6, 10, -1]
-    sample = build_sample()
+    sample = build_interactive_sample()
     runtime = Runtime(sample.program)
 
     root = tk.Tk()
     root.title("CIAO — сумма массива")
     root.columnconfigure(0, weight=1)
+    window = ArraySumWindow(root)
+    window.grid(row=0, column=0, sticky="nsew")
 
-    def initialize() -> None:
-        if runtime.snapshot(sample.controller).state is not SumController.idle:
-            return
-        runtime.send(sample.controller, SumController.start, values=values)
-        runtime.run()
+    # Подключение владеет только привязками. Window не получает Runtime и не
+    # читает снимки автоматов: состояние UI приходит командами самого View.
+    _bind_window(root, runtime, sample, window)
 
-    def next_tick() -> None:
-        if runtime.snapshot(sample.controller).state is not SumController.running:
-            return
-        runtime.send(sample.controller, SumController.tick)
-        runtime.run()
-
-    def reset() -> None:
-        if runtime.snapshot(sample.controller).state is not SumController.completed:
-            return
-        runtime.send(sample.controller, SumController.reset)
-        runtime.run()
-
-    def finish() -> None:
-        if runtime.snapshot(sample.controller).state is not SumController.completed:
-            return
-        runtime.send(sample.controller, SumController.tick)
-        runtime.run()
-
-    sample_view = ArraySumView(
-        root,
-        on_initialize=initialize,
-        on_step=next_tick,
-        on_reset=reset,
-        on_finish=finish,
-    )
-    sample_view.grid(row=0, column=0, sticky="nsew")
-
-    def render() -> None:
-        view = runtime.snapshot(sample.view)
-        controller = runtime.snapshot(sample.controller)
-        shown_values = view.values or tuple(values)
-        initialized = controller.state is not SumController.idle
-        selected = (
-            view.index
-            if initialized and view.index < len(shown_values)
-            else None
-        )
-        sample_view.render(
-            values=shown_values,
-            selected_index=selected,
-            total=view.total,
-            index=view.index,
-            tick_count=view.tick_count,
-            state_name=controller.state.name,
-            show_initialize=not initialized,
-            step_enabled=controller.state is SumController.running,
-            show_completed_actions=(
-                controller.state is SumController.completed
-            ),
-        )
-
-    # Адаптер обновляет GUI через очередь Tkinter после каждого runtime-события.
-    TkTraceAdapter(root, runtime, lambda _event: render())
-
-    # Первая отрисовка предшествует start, поэтому пользователь видит настоящее
-    # начальное состояние idle и сам инициирует переход кнопкой Init.
-    render()
     root.mainloop()
 
 

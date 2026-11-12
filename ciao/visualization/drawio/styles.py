@@ -128,7 +128,7 @@ def endpoint_style(*, provided: bool, side: str, stroke: str) -> str:
     )
 
 
-def action_interface_style(role: AutomatonRole) -> str:
+def required_interface_style(role: AutomatonRole) -> str:
     """Рисует фиксированную ножку с подковой без поворота наконечника."""
 
     return (
@@ -140,6 +140,12 @@ def action_interface_style(role: AutomatonRole) -> str:
         "defaultLabelBackgroundColor=page;fillColor=#0050ef;"
         f"strokeColor={ROLE_STROKES[role]};"
     )
+
+
+def action_interface_style(role: AutomatonRole) -> str:
+    """Сохраняет прежнее имя стиля required-интерфейса Action."""
+
+    return required_interface_style(role)
 
 
 def transition_style(role: AutomatonRole) -> str:

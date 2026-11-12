@@ -47,3 +47,23 @@ class QueryExecutionError(RuntimeExecutionError):
 
 class StepLimitExceeded(RuntimeExecutionError):
     """Исполнение достигло настроенного предела шагов."""
+
+
+class ExternalBindingConflictError(RuntimeExecutionError):
+    """Для external endpoint уже зарегистрирован живой обработчик."""
+
+
+class ExternalHandlerSignatureError(RuntimeExecutionError):
+    """Сигнатура external command-handler несовместима с endpoint."""
+
+
+class ExternalHandlerExecutionError(RuntimeExecutionError):
+    """External command-handler завершился исключением."""
+
+
+class RuntimeReentryError(RuntimeExecutionError):
+    """Публичное исполнение Runtime рекурсивно вызвано из активного шага."""
+
+
+class RuntimeThreadAffinityError(RuntimeExecutionError):
+    """Исполнение Runtime запрошено не из закреплённого owner thread."""

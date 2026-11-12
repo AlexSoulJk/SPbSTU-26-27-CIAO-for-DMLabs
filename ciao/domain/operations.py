@@ -33,6 +33,8 @@ class Operation:
         external: bool = False,
         text: str | None = None,
     ) -> None:
+        if type(external) is not bool:
+            raise TypeError("Operation.external должен быть bool")
         if text is not None and not isinstance(text, str):
             raise TypeError("Operation.text должен быть строкой или None")
         self.function = function
@@ -123,6 +125,12 @@ def _validated_text(value: object, decorator_name: str) -> str:
     return value
 
 
+def _validated_external(value: object, decorator_name: str) -> bool:
+    if type(value) is not bool:
+        raise TypeError(f"{decorator_name}: external должен быть bool")
+    return value
+
+
 @overload
 def provided_command(
     function: Callable[..., Any],
@@ -146,19 +154,34 @@ def provided_command(
 ) -> Operation | Callable[[Callable[..., Any]], Operation]:
     """Объявляет команду, предоставляемую автоматным классом."""
 
+    validated_external = _validated_external(external, "@provided_command")
+
     def decorate(actual: Callable[..., Any]) -> Operation:
         return _operation(
             actual,
             kind=OperationKind.COMMAND,
             direction=OperationDirection.PROVIDED,
-            external=external,
+            external=validated_external,
         )
 
     return decorate(function) if function is not None else decorate
 
 
 @overload
-def required_command(function: Callable[..., Any], /) -> Operation: ...
+def required_command(
+    function: Callable[..., Any],
+    /,
+    *,
+    external: bool = False,
+) -> Operation: ...
+
+
+@overload
+def required_command(
+    *,
+    text: str | object = _MISSING,
+    external: bool,
+) -> _OperationDecorator: ...
 
 
 @overload
@@ -170,11 +193,18 @@ def required_command(
     /,
     *,
     text: str | object = _MISSING,
+    external: bool | object = _MISSING,
 ) -> Operation | _OperationDecorator:
     """Объявляет required-команду и необязательный текст для диаграммы."""
 
     has_function = function is not _MISSING
     has_text = text is not _MISSING
+    has_external = external is not _MISSING
+    validated_external = (
+        _validated_external(external, "@required_command")
+        if has_external
+        else False
+    )
     if has_function:
         if has_text:
             raise TypeError("Для text используйте параметризованный @required_command")
@@ -184,19 +214,23 @@ def required_command(
             function,
             kind=OperationKind.COMMAND,
             direction=OperationDirection.REQUIRED,
+            external=validated_external,
         )
-    if not has_text:
+    if not has_text and not has_external:
         raise TypeError(
             "Форма @required_command() не поддерживается; "
             "используйте @required_command"
         )
-    validated_text = _validated_text(text, "@required_command")
+    validated_text = (
+        _validated_text(text, "@required_command") if has_text else None
+    )
 
     def decorate(actual: Callable[..., Any]) -> Operation:
         return _operation(
             actual,
             kind=OperationKind.COMMAND,
             direction=OperationDirection.REQUIRED,
+            external=validated_external,
             text=validated_text,
         )
 
@@ -226,12 +260,14 @@ def provided_query(
 ) -> Operation | Callable[[Callable[..., Any]], Operation]:
     """Объявляет синхронный запрос, предоставляемый автоматным классом."""
 
+    validated_external = _validated_external(external, "@provided_query")
+
     def decorate(actual: Callable[..., Any]) -> Operation:
         return _operation(
             actual,
             kind=OperationKind.QUERY,
             direction=OperationDirection.PROVIDED,
-            external=external,
+            external=validated_external,
         )
 
     return decorate(function) if function is not None else decorate

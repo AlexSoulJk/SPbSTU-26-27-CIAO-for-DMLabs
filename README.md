@@ -34,13 +34,24 @@ py -m venv .venv
 .venv\Scripts\python -m examples.array_sum.array_sum_tk
 ```
 
+Интерактивный пример поддерживает пошаговый и автоматический режимы. События
+кнопок поступают в автомат View через `TkConnection`, а Window не читает
+состояние Runtime: данные, органы управления и статус обновляются отдельными
+типизированными presentation-командами.
+
 ## Экспорт диаграммы draw.io
 
 ```powershell
 .venv\Scripts\python examples\export_drawio.py
 ```
 
-Команда создаёт `examples/sum_program.drawio` из фактической декларации `Program`. Файл состоит из нативных редактируемых фигур diagrams.net.
+Команда использует ELK Layered и создаёт набор схем из фактических деклараций
+`Program` в
+`examples/schemas/generated_drawio`, включая новый
+`interactive_sum_program.drawio`. Для запуска необходимы Node.js и зависимости
+из `package.json` (`npm install`). Публичный `export_program_drawio(...)`
+сохраняет baseline по умолчанию, а альтернативная стратегия передаётся явно
+через keyword-only параметр `layout_builder`.
 
 ## Реализовано
 
@@ -50,10 +61,12 @@ py -m venv .venv
 - компиляция и валидация `Program`/`Connection`, включая группы Guard/otherwise и `MissingOtherwiseWarning`;
 - FIFO-runtime, синхронные запросы, трасса с именем выбранного перехода и снимки состояния;
 - строгий/нестрогий режим и ограничение `run()`;
-- общий Tkinter-адаптер событий через `after` и отдельное представление примера суммы массива;
+- общий `TkConnection` с пошаговым `after`-pump, типизированными источниками
+  payload и external-командами для обновления Window;
 - односторонний экспорт `Program → .drawio` с состояниями, переходами, интерфейсами и `Connection`.
 
-Пример суммы разделён на автоматные классы в `examples/array_sum/automatos`,
-сборку программы в `examples/array_sum/program.py`, предметный Tkinter-интерфейс
-в `examples/array_sum/ui` и отдельные точки headless- и GUI-запуска.
+Старый пример в `examples/array_sum/automatos` и `program.py` сохранён как
+baseline для диаграмм. Интерактивный Controller/View/Window расположен в
+`examples/array_sum/interactive`; `array_sum_tk.py` является его GUI-точкой
+запуска, а `array_sum.py` сохраняет простой headless-запуск baseline.
 Архитектурные документы и руководства расположены в `docs/`.

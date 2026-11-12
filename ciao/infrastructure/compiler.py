@@ -586,9 +586,16 @@ def _compile_automaton(automaton_type: type[Automaton[Any]]) -> AutomatonDefinit
             raise ModelValidationError(
                 f"Команда {operation.qualified_name} должна возвращать None"
             )
-        if operation.external and operation.direction is not OperationDirection.PROVIDED:
+        if operation.external and not (
+            operation.direction is OperationDirection.PROVIDED
+            or (
+                operation.direction is OperationDirection.REQUIRED
+                and operation.kind is OperationKind.COMMAND
+            )
+        ):
             raise ModelValidationError(
-                f"{operation.qualified_name}: external разрешён только для provided-операций"
+                f"{operation.qualified_name}: external разрешён для provided-операций "
+                "и required-команд"
             )
         if operation.text is not None and operation.direction is not OperationDirection.REQUIRED:
             raise ModelValidationError(
@@ -802,7 +809,10 @@ def compile_program(program: Program) -> CompiledProgram:
     for object_ref in program.objects:
         definition = definitions[object_ref.automaton]
         for operation in definition.operations:
-            if operation.direction is OperationDirection.REQUIRED:
+            if (
+                operation.direction is OperationDirection.REQUIRED
+                and not operation.external
+            ):
                 endpoint = Endpoint(object_ref, operation)
                 if endpoint not in routes:
                     raise ModelValidationError(

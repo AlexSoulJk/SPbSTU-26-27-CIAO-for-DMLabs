@@ -1184,40 +1184,100 @@ def _layout_block(
         if operation_view.id in operation_geometries
     ]
     for operation_view in visible_operations:
-        geometry, side, prepared_label_geometry = operation_geometries[
+        symbol_geometry, side, prepared_label_geometry = operation_geometries[
             operation_view.id
         ]
         operation = operation_view.operation
-        geometries[operation_view.id] = geometry
-        nodes.append(
-            NodeCell(
-                id=operation_view.id,
-                label="",
-                style=styles.endpoint_style(
-                    provided=operation.direction is OperationDirection.PROVIDED,
-                    side=side,
-                    stroke=(
-                        styles.QUERY_STROKE
-                        if operation.kind is OperationKind.QUERY
-                        else styles.ROLE_STROKES[block.role]
-                    ),
-                ),
-                geometry=geometry,
-                kind="operation",
-                metadata=(
-                    ("ciaoOperation", operation.name),
-                    ("ciaoDirection", operation.direction.value),
-                    ("ciaoKind", operation.kind.value),
-                    ("ciaoSignature", operation_view.label),
-                    ("ciaoExternal", str(operation.external).lower()),
-                    *_operation_text_metadata(operation),
-                ),
-            )
+        operation_metadata = (
+            ("ciaoOperation", operation.name),
+            ("ciaoDirection", operation.direction.value),
+            ("ciaoKind", operation.kind.value),
+            ("ciaoSignature", operation_view.label),
+            ("ciaoExternal", str(operation.external).lower()),
+            *_operation_text_metadata(operation),
         )
+        is_external_required = (
+            operation.external
+            and operation.direction is OperationDirection.REQUIRED
+        )
+        if is_external_required:
+            center_x = symbol_geometry.x + symbol_geometry.width // 2
+            boundary_y = symbol_geometry.y + symbol_geometry.height
+            base_geometry = Rect(
+                center_x - ACTION_INTERFACE_ANCHOR_SIZE // 2,
+                boundary_y - ACTION_INTERFACE_ANCHOR_SIZE // 2,
+                ACTION_INTERFACE_ANCHOR_SIZE,
+                ACTION_INTERFACE_ANCHOR_SIZE,
+            )
+            tip_geometry = Rect(
+                center_x - ACTION_INTERFACE_ANCHOR_SIZE // 2,
+                boundary_y
+                - ACTION_INTERFACE_HEIGHT
+                - ACTION_INTERFACE_ANCHOR_SIZE // 2,
+                ACTION_INTERFACE_ANCHOR_SIZE,
+                ACTION_INTERFACE_ANCHOR_SIZE,
+            )
+            tip_id = f"{operation_view.id}-interface-tip"
+            geometries[operation_view.id] = base_geometry
+            geometries[tip_id] = tip_geometry
+            nodes.extend(
+                (
+                    NodeCell(
+                        id=operation_view.id,
+                        label="",
+                        style=styles.INTERFACE_ANCHOR,
+                        geometry=base_geometry,
+                        kind="operation",
+                        metadata=operation_metadata,
+                    ),
+                    NodeCell(
+                        id=tip_id,
+                        label="",
+                        style=styles.INTERFACE_ANCHOR,
+                        geometry=tip_geometry,
+                        kind="interfaceAnchor",
+                        metadata=operation_metadata,
+                    ),
+                )
+            )
+            edges.append(
+                EdgeCell(
+                    id=f"{operation_view.id}-interface",
+                    label="",
+                    style=styles.required_interface_style(block.role),
+                    source_id=operation_view.id,
+                    target_id=tip_id,
+                    points=(),
+                    kind="externalRequiredInterface",
+                    metadata=operation_metadata,
+                )
+            )
+        else:
+            geometries[operation_view.id] = symbol_geometry
+            nodes.append(
+                NodeCell(
+                    id=operation_view.id,
+                    label="",
+                    style=styles.endpoint_style(
+                        provided=(
+                            operation.direction is OperationDirection.PROVIDED
+                        ),
+                        side=side,
+                        stroke=(
+                            styles.QUERY_STROKE
+                            if operation.kind is OperationKind.QUERY
+                            else styles.ROLE_STROKES[block.role]
+                        ),
+                    ),
+                    geometry=symbol_geometry,
+                    kind="operation",
+                    metadata=operation_metadata,
+                )
+            )
         display_label = _visible_operation_label(operation_view)
         label_geometry = (
             _operation_label_geometry(
-                geometry,
+                symbol_geometry,
                 side,
                 measurements.operation_sizes[operation_view.id],
             )

@@ -12,7 +12,7 @@ from dataclasses import dataclass, replace
 from html import escape
 from math import ceil, sqrt
 
-from ciao.domain import OperationDirection, OperationKind
+from ciao.domain import OperationKind
 
 from . import styles
 from .diagram_model import (
@@ -252,16 +252,6 @@ def _compose_block(
         content.y + plan.graph_origin_y,
     )
     graph_kinds = {"state", "exit", "exitLabel", "entry", "decision"}
-    external_operation_ids = {
-        operation.id for operation in block.operations if operation.operation.external
-    }
-    external_label_ids = {f"{item}-label" for item in external_operation_ids}
-    external_interface_tip_ids = {
-        f"{operation.id}-interface-tip"
-        for operation in block.operations
-        if operation.operation.external
-        and operation.operation.direction is OperationDirection.REQUIRED
-    }
     nodes: list[NodeCell] = []
     geometries: dict[str, Rect] = {}
     for node in raw_nodes:
@@ -276,18 +266,9 @@ def _compose_block(
                 plan.x_scale,
                 plan.y_scale,
             )
-        elif node.id in (
-            external_operation_ids
-            | external_label_ids
-            | external_interface_tip_ids
-        ):
-            mapped_external = _map_rectangle(
-                node_geometry, graph_origin, plan.x_scale, 1.0
-            )
-            node_geometry = replace(
-                mapped_external,
-                y=node_geometry.y,
-            )
+        # External-операции уже уложены _layout_block в измеренную полосу над
+        # рамкой. x_scale относится только к сетке состояний: повторное
+        # масштабирование раздвигало ярлыки и выносило крайние за автомат.
         mapped_node = replace(node, label=label, geometry=node_geometry)
         nodes.append(mapped_node)
         geometries[node.id] = node_geometry

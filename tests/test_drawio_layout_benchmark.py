@@ -132,17 +132,23 @@ def _assert_external_required_interfaces(
 
 def _assert_external_operation_fence(
     testcase: unittest.TestCase,
+    description: object,
     page: DiagramPage,
 ) -> None:
-    """Проверяет подписи над external-ярлыками и горизонтальные зазоры."""
+    """Проверяет привязку external-ярлыков к верхней границе автоматов."""
 
     nodes = {node.id: node for node in page.nodes}
+    operation_owners = {
+        operation.id: block.id
+        for block in description.blocks
+        for operation in block.operations
+    }
     required_interfaces = {
         edge.source_id: edge
         for edge in page.edges
         if edge.kind == "externalRequiredInterface"
     }
-    items: list[tuple[int, int]] = []
+    items_by_block: dict[str, list[tuple[int, int]]] = {}
     external_operations = [
         node
         for node in page.nodes
@@ -166,19 +172,44 @@ def _assert_external_operation_fence(
             symbol_right = center_x + 8
             symbol_top = tip.geometry.y
             expected_gap = 5
+        owner_id = operation_owners[operation.id]
+        block = nodes[owner_id].geometry
+        item_left = min(symbol_left, label.geometry.x)
+        item_right = max(
+            symbol_right,
+            label.geometry.x + label.geometry.width,
+        )
+        testcase.assertGreaterEqual(item_left, block.x)
+        testcase.assertLessEqual(item_right, block.x + block.width)
+        if metadata["ciaoDirection"] == "provided":
+            testcase.assertEqual(
+                block.y,
+                operation.geometry.y + operation.geometry.height,
+            )
+        else:
+            testcase.assertEqual(
+                block.y,
+                operation.geometry.y + operation.geometry.height // 2,
+            )
         testcase.assertEqual(
             expected_gap,
             symbol_top - (label.geometry.y + label.geometry.height),
         )
-        items.append(
+        items_by_block.setdefault(owner_id, []).append(
             (
-                min(symbol_left, label.geometry.x),
-                max(symbol_right, label.geometry.x + label.geometry.width),
+                item_left,
+                item_right,
             )
         )
 
-    for previous, current in zip(sorted(items), sorted(items)[1:]):
-        testcase.assertGreaterEqual(current[0] - previous[1], 18)
+    for owner_id, items in items_by_block.items():
+        ordered = sorted(items)
+        for previous, current in zip(ordered, ordered[1:]):
+            testcase.assertGreaterEqual(current[0] - previous[1], 18)
+        block = nodes[owner_id].geometry
+        left_padding = ordered[0][0] - block.x
+        right_padding = block.x + block.width - ordered[-1][1]
+        testcase.assertLessEqual(abs(left_padding - right_padding), 1)
 
 
 class DrawioLayoutBenchmarkTests(unittest.TestCase):
@@ -209,7 +240,7 @@ class DrawioLayoutBenchmarkTests(unittest.TestCase):
             self.assertIn("strokeWidth=2.3", interface.style)
             self.assertNotIn("rotation=", interface.style)
         _assert_normalized_bottom_fence(self, self.description, first)
-        _assert_external_operation_fence(self, first)
+        _assert_external_operation_fence(self, self.description, first)
 
     def test_multiphase_external_required_interface_has_fixed_leg(self) -> None:
         description = build_diagram(
@@ -271,7 +302,7 @@ class DrawioLayoutBenchmarkTests(unittest.TestCase):
         ]
         self.assertEqual(7, len(interfaces))
         _assert_normalized_bottom_fence(self, self.description, elk_page)
-        _assert_external_operation_fence(self, elk_page)
+        _assert_external_operation_fence(self, self.description, elk_page)
         controller = blocks[self.description.blocks[0].id]
         self.assertLessEqual(controller.geometry.width, 2000)
         self.assertLessEqual(elk_page.height, 1100)

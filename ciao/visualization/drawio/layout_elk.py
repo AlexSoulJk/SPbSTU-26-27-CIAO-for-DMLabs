@@ -678,6 +678,35 @@ def _layout_block_nodes(
     template_edges = {edge.id: edge for edge in template.edges}
     owned_ids = _block_node_ids(block, template)
     internal_ids = _internal_node_ids(block, template)
+    external_ids = {
+        identifier
+        for operation in block.operations
+        if operation.operation.external
+        for identifier in (
+            operation.id,
+            f"{operation.id}-label",
+            f"{operation.id}-interface-tip",
+        )
+        if identifier in template_nodes
+    }
+    external_geometries = [
+        template_nodes[identifier].geometry for identifier in external_ids
+    ]
+    if external_geometries:
+        external_left = min(item.x for item in external_geometries)
+        external_right = max(
+            item.x + item.width for item in external_geometries
+        )
+        translated_center = (
+            external_left
+            + external_right
+            + 2 * (new_block.x - old_block.x)
+        ) // 2
+        external_x_shift = (
+            new_block.x + new_block.width // 2 - translated_center
+        )
+    else:
+        external_x_shift = 0
     context_geometry = template_nodes[f"{block.id}-context"].geometry
     if _uses_stacked_dense_graph(block, template):
         graph_origin = Point(
@@ -724,6 +753,14 @@ def _layout_block_nodes(
             mapped = replace(node, geometry=geometry)
         else:
             mapped = _translate_template_node(node, old_block, new_block)
+            if identifier in external_ids:
+                mapped = replace(
+                    mapped,
+                    geometry=replace(
+                        mapped.geometry,
+                        x=mapped.geometry.x + external_x_shift,
+                    ),
+                )
         result_nodes.append(mapped)
         mapped_geometries[identifier] = mapped.geometry
 

@@ -137,7 +137,7 @@ class InteractiveArraySumTests(unittest.TestCase):
                 self.assertFalse(any(event.operation == "tick" for event in runtime.trace))
 
     def test_reset_reinitialization_and_finish_follow_view_commands(self) -> None:
-        sample, runtime, _ = _runtime_with_presentations()
+        sample, runtime, presentations = _runtime_with_presentations()
         runtime.send(
             sample.view,
             SumView.init_clicked,
@@ -146,8 +146,20 @@ class InteractiveArraySumTests(unittest.TestCase):
         runtime.run()
         runtime.send(sample.view, SumView.reset_clicked)
         runtime.run()
-        self.assertIs(runtime.snapshot(sample.controller).state, SumController.idle)
-        self.assertIs(runtime.snapshot(sample.view).state, SumView.idle)
+        controller = runtime.snapshot(sample.controller)
+        view = runtime.snapshot(sample.view)
+        self.assertIs(controller.state, SumController.idle)
+        self.assertIs(view.state, SumView.idle)
+        self.assertEqual([5], controller.values)
+        self.assertEqual((5,), view.values)
+        self.assertEqual(
+            (0, 0, 0),
+            (controller.total, controller.index, controller.tick_count),
+        )
+        self.assertEqual(
+            ("render_data", DataPresentation((5,), None, 0, 0, 0)),
+            presentations.calls[-3],
+        )
 
         runtime.send(
             sample.view,

@@ -897,7 +897,7 @@ class DrawioTests(unittest.TestCase):
                 "add_current",
                 "mark_running",
                 "mark_completed",
-                "clear",
+                "reset_progress",
                 "remember_start",
                 "apply_snapshot",
             },

@@ -11,12 +11,15 @@ from ciao import Runtime
 from examples.array_sum.interactive_run import _bind_window
 from examples.array_sum import (
     CalculationMode,
+    ControlsPresentation,
+    DataPresentation,
     SumController,
     SumView,
     StatusPresentation,
     build_sample,
 )
 from examples.array_sum.ui import ArraySumWindow
+from examples.array_sum.ui.array_sum_window import INITIAL_VALUES
 
 
 class _RecordingWindow(ArraySumWindow):
@@ -24,10 +27,22 @@ class _RecordingWindow(ArraySumWindow):
 
     def __init__(self, master: tk.Misc) -> None:
         self.handler_threads: list[int] = []
+        self.data_presentations: list[DataPresentation] = []
+        self.controls_presentations: list[ControlsPresentation] = []
+        self.status_presentations: list[StatusPresentation] = []
         super().__init__(master)
+
+    def render_data(self, presentation: DataPresentation) -> None:
+        self.data_presentations.append(presentation)
+        super().render_data(presentation)
+
+    def render_controls(self, presentation: ControlsPresentation) -> None:
+        self.controls_presentations.append(presentation)
+        super().render_controls(presentation)
 
     def render_status(self, presentation: StatusPresentation) -> None:
         self.handler_threads.append(get_ident())
+        self.status_presentations.append(presentation)
         super().render_status(presentation)
 
 
@@ -44,6 +59,18 @@ class ArraySumTkIntegrationTests(unittest.TestCase):
             sample = build_sample()
             runtime = Runtime(sample.program)
             window = _RecordingWindow(root)
+            self.assertEqual(
+                [DataPresentation(INITIAL_VALUES, None, 0, 0, 0)],
+                window.data_presentations,
+            )
+            self.assertEqual(
+                [ControlsPresentation(True, True, False, False, False, False)],
+                window.controls_presentations,
+            )
+            self.assertEqual(
+                [StatusPresentation("Введите массив и выберите режим")],
+                window.status_presentations,
+            )
             connection = _bind_window(root, runtime, sample, window)
 
             window.values_entry.delete(0, tk.END)

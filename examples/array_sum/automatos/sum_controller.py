@@ -105,8 +105,9 @@ class SumController(ControllerAutomaton[SumContext]):
         ctx.pending_phase = SnapshotPhase.COMPLETED
 
     @action
-    def clear(self, ctx: SumContext) -> None:
-        ctx.values.clear()
+    def reset_progress(self, ctx: SumContext) -> None:
+        # Reset начинает новый прогон тех же входных данных. Полное очищение
+        # формы является отдельным UI-сценарием и не подменяется этой командой.
         ctx.index = ctx.total = ctx.tick_count = 0
         ctx.pending_phase = SnapshotPhase.IDLE
 
@@ -196,7 +197,7 @@ class SumController(ControllerAutomaton[SumContext]):
     on_reset = transition(
         source=completed,
         event=reset,
-        actions=(clear, publish_snapshot),
+        actions=(reset_progress, publish_snapshot),
         target=publishing,
     )
     on_finish = transition(source=completed, event=finish, target=done)

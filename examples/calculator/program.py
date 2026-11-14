@@ -1,73 +1,85 @@
-from ciao import Program, AutomatonObject, Connection
+"""Сборка программы учебного пошагового калькулятора."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+from ciao import AutomatonObject, Connection, Program
 
 from .automatos import (
-    CalculatorController,
     CalculatorContext,
+    CalculatorController,
     CalculatorView,
     CalculatorViewContext,
-    OperatorService,
     OperatorContext,
+    OperatorService,
 )
 
 
-def build_calculator_program():
+@dataclass(frozen=True)
+class Sample:
+    program: Program
+    controller: AutomatonObject
+    operators: AutomatonObject
+    view: AutomatonObject
+
+
+def build_sample() -> Sample:
+    """Создаёт Controller, OperatorService, View и все их соединения."""
+
     controller = AutomatonObject(
-        name="calculator",
-        automaton=CalculatorController,
-        initial_context=CalculatorContext(),
+        "calculator",
+        CalculatorController,
+        CalculatorContext(),
     )
-
     operators = AutomatonObject(
-        name="operators",
-        automaton=OperatorService,
-        initial_context=OperatorContext(),
+        "operators",
+        OperatorService,
+        OperatorContext(),
     )
-
-    view = AutomatonObject(
-        name="view",
-        automaton=CalculatorView,
-        initial_context=CalculatorViewContext(),
-    )
-
+    view = AutomatonObject("view", CalculatorView, CalculatorViewContext())
     program = Program(
         objects=(controller, operators, view),
         connections=(
-            # Синхронные запросы
             Connection(
-                required=(
-                    controller,
-                    CalculatorController.classify_token,
-                ),
-                provided=(operators, OperatorService.classify),
+                (controller, CalculatorController.classify_token),
+                (operators, OperatorService.classify),
             ),
             Connection(
-                required=(
-                    controller,
-                    CalculatorController.precedence,
-                ),
-                provided=(operators, OperatorService.precedence),
+                (controller, CalculatorController.precedence),
+                (operators, OperatorService.precedence),
             ),
             Connection(
-                required=(
-                    controller,
-                    CalculatorController.calculate,
-                ),
-                provided=(operators, OperatorService.calculate),
-            ),
-
-            # Асинхронные команды
-            Connection(
-                required=(controller, CalculatorController.draw),
-                provided=(view, CalculatorView.draw),
+                (controller, CalculatorController.calculate),
+                (operators, OperatorService.calculate),
             ),
             Connection(
-                required=(view, CalculatorView.draw_completed),
-                provided=(
-                    controller,
-                    CalculatorController.draw_completed,
-                ),
+                (view, CalculatorView.start),
+                (controller, CalculatorController.start),
+            ),
+            Connection(
+                (view, CalculatorView.tick),
+                (controller, CalculatorController.tick),
+            ),
+            Connection(
+                (view, CalculatorView.reset),
+                (controller, CalculatorController.reset),
+            ),
+            Connection(
+                (view, CalculatorView.finish),
+                (controller, CalculatorController.finish),
+            ),
+            Connection(
+                (controller, CalculatorController.draw),
+                (view, CalculatorView.draw),
+            ),
+            Connection(
+                (view, CalculatorView.draw_completed),
+                (controller, CalculatorController.draw_completed),
             ),
         ),
     )
+    return Sample(program, controller, operators, view)
 
-    return program, controller, operators, view
+
+__all__ = ["Sample", "build_sample"]

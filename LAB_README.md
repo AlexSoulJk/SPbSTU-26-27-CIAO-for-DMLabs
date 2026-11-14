@@ -37,14 +37,16 @@ examples/<example_name>/
 - старую реализацию после замены не следует сохранять во вложенной подпапке
   вроде `legacy`, `interactive` или `new`; историю хранит Git.
 
-## Эталон: ArraySum
+## Эталонные примеры
 
 ```powershell
 .venv\Scripts\python -m examples.array_sum.headless_run
 .venv\Scripts\python -m examples.array_sum.interactive_run
+.venv\Scripts\python -m examples.calculator.headless_run
+.venv\Scripts\python -m examples.calculator.interactive_run
 ```
 
-Его редактируемая ELK-диаграмма создаётся общей точкой экспорта:
+Их редактируемые ELK-диаграммы создаются общей точкой экспорта:
 
 ```powershell
 .venv\Scripts\python examples\export_drawio.py

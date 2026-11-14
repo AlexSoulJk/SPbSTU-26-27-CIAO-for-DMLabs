@@ -1,28 +1,17 @@
-from .calculator_controller import (
-    CalculatorController,
-    CalculatorContext,
-)
+"""Автоматные классы учебного калькулятора."""
 
-from .calculator_view import (
-    CalculatorView,
-    CalculatorViewContext,
-)
-
-from .operator_service import (
-    OperatorService,
-    OperatorContext,
-    TokenKind,
-)
-
+from .calculator_controller import CalculatorContext, CalculatorController
+from .calculator_view import CalculatorView, CalculatorViewContext
+from .operator_service import OperatorContext, OperatorService, TokenKind
 from .utils import tokenize
 
 __all__ = [
-    "CalculatorController",
     "CalculatorContext",
+    "CalculatorController",
     "CalculatorView",
     "CalculatorViewContext",
-    "OperatorService",
     "OperatorContext",
+    "OperatorService",
     "TokenKind",
     "tokenize",
 ]

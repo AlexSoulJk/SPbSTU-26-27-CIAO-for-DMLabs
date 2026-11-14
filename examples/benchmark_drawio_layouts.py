@@ -4,8 +4,12 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from pathlib import Path
 from typing import Callable
+
+if __package__ in {None, ""}:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from ciao.domain import Program
 from ciao.infrastructure import compile_program
@@ -16,14 +20,14 @@ from ciao.visualization.drawio.benchmark import (
 from ciao.visualization.drawio.builder import build_diagram
 from ciao.visualization.drawio.writer import serialize_drawio
 from examples.array_sum.program import build_sample as build_array_sum
-from examples.calculator.program import build_calculator_program
+from examples.calculator.program import build_sample as build_calculator_sample
 from examples.query_di import build_sample as build_query_di
 
 
 def _programs() -> dict[str, Callable[[], Program]]:
     return {
         "array_sum": lambda: build_array_sum().program,
-        "calculator": lambda: build_calculator_program()[0],
+        "calculator": lambda: build_calculator_sample().program,
         "query_di": build_query_di,
     }
 

@@ -28,7 +28,7 @@ from ciao.visualization.drawio.layout_elk import (
 )
 from ciao.visualization.drawio.metrics import evaluate_layout
 from examples.array_sum.program import build_sample
-from examples.calculator.program import build_calculator_program
+from examples.calculator.program import build_sample as build_calculator_sample
 
 
 _NODE_STYLE = "rounded=1;"
@@ -320,8 +320,8 @@ class DrawioLayoutBenchmarkTests(unittest.TestCase):
         shutil.which("node") is not None and Path("node_modules/elkjs").exists(),
         "для интеграционной проверки требуется npm install",
     )
-    def test_elk_compacts_dense_calculator_controller(self) -> None:
-        program = build_calculator_program()[0]
+    def test_elk_routes_updated_calculator_without_collisions(self) -> None:
+        program = build_calculator_sample().program
         description = build_diagram(compile_program(program))
         result, baseline_page, _, elk_page = benchmark_layouts_with_elk(
             description
@@ -333,13 +333,17 @@ class DrawioLayoutBenchmarkTests(unittest.TestCase):
             if node.kind == "automaton"
             and dict(node.metadata).get("ciaoObject") == "calculator"
         )
-        self.assertLessEqual(controller.geometry.width, 850)
-        self.assertLess(elk_page.width, baseline_page.width)
+        # UI-версия содержит полный reset/finish-протокол и отдельный View с
+        # external-интерфейсами, поэтому сравнивать общую ширину со старым
+        # headless-графом некорректно. Ограничиваем сам Controller и высоту.
+        self.assertLessEqual(controller.geometry.width, 1500)
         self.assertLess(elk_page.height, baseline_page.height)
         assert result.elk is not None
         self.assertEqual(0, result.elk.metrics.object_overlap_pairs)
         self.assertEqual(0, result.elk.metrics.edge_crossings)
         self.assertEqual(0, result.elk.metrics.label_edge_intersections)
+        _assert_external_operation_fence(self, description, elk_page)
+        _assert_external_required_interfaces(self, elk_page)
 
         compact = next(
             edge

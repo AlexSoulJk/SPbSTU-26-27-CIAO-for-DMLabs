@@ -38,7 +38,7 @@ from ciao.visualization.drawio.layout import layout_diagram
 from examples.array_sum.automatos import SumController, SumView
 from examples.array_sum.contracts import CalculationMode, StartInput
 from examples.array_sum.program import build_sample
-from examples.calculator.program import build_calculator_program
+from examples.calculator.program import build_sample as build_calculator_sample
 
 
 def _cells(root: ET.Element, kind: str) -> list[ET.Element]:
@@ -994,7 +994,7 @@ class DrawioTests(unittest.TestCase):
         self.assertGreater(widths[1], 650)
 
     def test_three_blocks_keep_order_and_connections_use_reserved_channels(self) -> None:
-        program, _, _, _ = build_calculator_program()
+        program = build_calculator_sample().program
         with tempfile.TemporaryDirectory() as directory:
             output = Path(directory) / "calculator.drawio"
             export_program_drawio(program, output)

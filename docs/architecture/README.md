@@ -79,6 +79,15 @@ def below_limit(self, ctx: ControllerContext, query: Query) -> bool:
 
 Для пустого массива `start` сразу публикует `COMPLETED` без `tick`. Из `completed` явный `reset` обнуляет прогресс, сохраняет массив и режим последнего запуска и через снимок `IDLE` возвращает оба автомата в начальные состояния. `finish` переводит Controller в `done`, а View — в `final`. Window не знает состояний автоматов и получает только типизированные presentation-команды.
 
+Calculator следует той же границе UI: Window отправляет `StartInput` и нажатия
+кнопок только external provided-командам `CalculatorView`. View маршрутизирует
+`start/tick/reset/finish` Controller-у и принимает типизированный
+`CalculatorSnapshot`. Controller использует одно состояние `publishing` и поле
+`pending_phase`, поэтому подтверждение `draw_completed` возвращает его в
+`converting`, `evaluating`, `completed` либо `idle` без динамического target.
+Данные вычисления, controls и status публикуются Window независимыми external
+required-командами; Window не получает Runtime и автоматные контексты.
+
 Runtime вычисляет все Guard группы ровно по одному разу в декларативном порядке, не используя порядок как приоритет. Единственный истинный Guard выбирается вместо `otherwise`; несколько истинных дают `AmbiguousTransitionError`; исключение Guard прекращает выбор. Имя выбранного class-атрибута сохраняется в `StepResult.transition` и `TraceEvent.transition`. Для ошибки Action оно остаётся доступным, а до выбора ветви равно `None`.
 
 ## Направление зависимостей

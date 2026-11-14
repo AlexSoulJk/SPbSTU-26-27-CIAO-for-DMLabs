@@ -1,3 +1,7 @@
+"""Детерминированная токенизация арифметических выражений."""
+
+from __future__ import annotations
+
 import re
 
 
@@ -5,6 +9,8 @@ TOKEN_PATTERN = re.compile(r"\d+(?:\.\d+)?|[()+*/-]")
 
 
 def tokenize(expression: str) -> list[str]:
+    """Разбивает поддерживаемое выражение или отклоняет посторонний текст."""
+
     tokens = []
     pos = 0
 

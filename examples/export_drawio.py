@@ -10,15 +10,11 @@ from ciao.visualization.drawio.layout_elk import layout_diagram_elk
 # Скрипт поддерживает запуск и как файла, и как модуля пакета examples.
 if __package__:
     from .array_sum.program import build_sample as build_array_sum_sample
-    from .calculator.program import (
-        build_calculator_program as build_calculator_sample,
-    )
+    from .calculator.program import build_sample as build_calculator_sample
     from .query_di import build_sample as build_query_sample
 else:
     from array_sum.program import build_sample as build_array_sum_sample
-    from calculator.program import (
-        build_calculator_program as build_calculator_sample,
-    )
+    from calculator.program import build_sample as build_calculator_sample
     from query_di import build_sample as build_query_sample
 
 
@@ -39,7 +35,7 @@ def main() -> None:
             layout_builder=layout_diagram_elk,
         ),
         export_program_drawio(
-            build_calculator_sample()[0],
+            build_calculator_sample().program,
             output_directory / "calculator_program.drawio",
             layout_builder=layout_diagram_elk,
         ),

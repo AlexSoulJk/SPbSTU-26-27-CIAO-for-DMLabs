@@ -19,22 +19,25 @@ py -m venv .venv
 .venv\Scripts\python -m pytest
 ```
 
-## Headless-пример
+## Headless-примеры
 
 ```powershell
 .venv\Scripts\python -m examples.array_sum.headless_run
+.venv\Scripts\python -m examples.calculator.headless_run
 ```
 
 Помимо результата команда печатает последовательную трассу операций runtime:
 переходы состояний и созданные ими сообщения `emit`.
 
-## Tkinter-пример
+## Tkinter-примеры
 
 ```powershell
 .venv\Scripts\python -m examples.array_sum.interactive_run
+.venv\Scripts\python -m examples.calculator.interactive_run
 ```
 
-Интерактивный пример поддерживает пошаговый и автоматический режимы. События
+ArraySum поддерживает пошаговый и автоматический режимы, Calculator показывает
+преобразование в ОПН и вычисление по одному токену. В обоих примерах события
 кнопок поступают в автомат View через `TkConnection`, а Window не читает
 состояние Runtime: данные, органы управления и статус обновляются отдельными
 типизированными presentation-командами.
@@ -65,8 +68,8 @@ py -m venv .venv
   payload и external-командами для обновления Window;
 - односторонний экспорт `Program → .drawio` с состояниями, переходами, интерфейсами и `Connection`.
 
-Пример суммы разделён на `automatos`, `ui`, общие DTO в `contracts.py` и единую
-сборку в `program.py`. Точки запуска называются `headless_run.py` и
-`interactive_run.py`; правила оформления остальных лабораторных примеров
-зафиксированы в `LAB_README.md`.
+Примеры ArraySum и Calculator разделены на `automatos`, `ui`, общие DTO в
+`contracts.py` и единую сборку в `program.py`. Точки запуска называются
+`headless_run.py` и `interactive_run.py`; правила оформления остальных
+лабораторных примеров зафиксированы в `LAB_README.md`.
 Архитектурные документы и руководства расположены в `docs/`.

@@ -120,13 +120,20 @@ def above_threshold(
 
 Для нескольких операций применяется `queries=(sensor_value, sensor_ready)` и параметр `queries: Queries`; конкретный запрос вызывается как `queries[self.sensor_value]()`. Query выполняется немедленно через настроенный `Connection`, не попадает в FIFO и не кэшируется. Capability нельзя сохранять для последующего использования. Контекст не содержит ссылку на Runtime и не предоставляет методов управления очередью. Полный небольшой пример расположен в [`examples/query_di.py`](../../examples/query_di.py).
 
-Исполняемый пример разделён по ответственности: автоматные классы находятся в [`examples/array_sum/automatos`](../../examples/array_sum/automatos), Window — в [`examples/array_sum/ui`](../../examples/array_sum/ui), общие DTO — в `contracts.py`, а сборка объектов и соединений — в [`examples/array_sum/program.py`](../../examples/array_sum/program.py). `headless_run.py` и `interactive_run.py` запускают одну и ту же программу.
+Исполняемые примеры разделены по ответственности: автоматные классы находятся в `automatos`, Window — в `ui`, общие DTO — в `contracts.py`, а сборка объектов и соединений — в `program.py`. `headless_run.py` и `interactive_run.py` каждого примера запускают одну и ту же программу. Эталонные пакеты: [`examples/array_sum`](../../examples/array_sum) и [`examples/calculator`](../../examples/calculator).
 
 Controller различает `running_step` и `running_all`. Каждый `tick` обрабатывает ровно один элемент. Пошаговый режим публикует промежуточные снимки, автоматический планирует следующий `tick` через self-connection и публикует только итог. Последний вычислительный тик сразу создаёт `COMPLETED`, поэтому дополнительного пустого тика нет. View подтверждает каждый опубликованный снимок командой `draw_completed`; `reset` обнуляет прогресс, сохраняет входной массив и возвращает оба автомата в `idle`, а явный `finish` переводит их в финальные состояния.
 
 `StepResult.transition` и `TraceEvent.transition` содержат имя выбранного class-атрибута перехода. До выбора ветви, для пустого шага и `IGNORED` используется `None`; если исключение возникло внутри Action, имя уже выбранной ветви сохраняется.
 
 Tkinter-пример при запуске показывает начальное состояние `idle`. Кнопка `Init` отправляет `StartInput` в View, а View уже маршрутизирует `start` Controller. В пошаговом режиме появляется кнопка «Следующий шаг»; в автоматическом Controller продвигается сам. Window не читает Runtime snapshot: данные, кнопки и статус приходят отдельными external required-командами View.
+
+Calculator использует тот же UI-контракт: `start_clicked`, `next_clicked`,
+`reset_clicked` и `finish_clicked` являются external provided-командами View.
+Controller преобразует выражение в ОПН и вычисляет его по одному токену, а View
+публикует независимые `DataPresentation`, `ControlsPresentation` и
+`StatusPresentation`. Reset сохраняет выражение, очищает прогресс и возвращает
+оба автомата в `idle`; Finish переводит их в final-состояния.
 
 ## Экспорт в draw.io
 

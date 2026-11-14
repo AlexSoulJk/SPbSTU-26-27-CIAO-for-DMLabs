@@ -1,13 +1,19 @@
 
+"""Сервис классификации токенов и выполнения бинарных операций."""
+
+from __future__ import annotations
+
 import re
 from dataclasses import dataclass, field
 from enum import Enum, auto
-from typing import Callable
+from collections.abc import Callable
 
 from ciao import Automaton, AutomatonContext, State, provided_query
 
 
 class TokenKind(Enum):
+    """Категория токена арифметического выражения."""
+
     NUMBER = auto()
     OPERATOR = auto()
     LEFT_PAREN = auto()
@@ -17,6 +23,8 @@ class TokenKind(Enum):
 
 @dataclass
 class OperatorContext(AutomatonContext):
+    """Таблицы операторов, принадлежащие экземпляру сервиса."""
+
     priorities: dict[str, int] = field(
         default_factory=lambda: {
             "+": 1,

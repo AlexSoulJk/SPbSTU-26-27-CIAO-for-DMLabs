@@ -1,0 +1,15 @@
+\begin{tikzpicture}[
+  state/.style={draw=ciaoBlue,fill=ciaoPaleBlue!45,very thick,
+    rounded corners=2mm,minimum width=32mm,minimum height=15mm,
+    font=\sffamily\bfseries},
+  flow/.style={-{Stealth[length=3mm]},thick,draw=ciaoNavy},
+  every node/.style={font=\small}
+]
+  \node[state] (off) {off};
+  \node[state,right=55mm of off] (on) {on};
+  \draw[flow] (off) to[bend left=18]
+    node[above,fill=white,inner sep=2pt]{switch\_on} (on);
+  \draw[flow] (on) to[bend left=18]
+    node[below,fill=white,inner sep=2pt]{switch\_off} (off);
+  \draw[flow] ($(off.west)+(-14mm,0)$) -- (off.west);
+\end{tikzpicture}

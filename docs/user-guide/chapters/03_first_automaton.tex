@@ -1,0 +1,199 @@
+
+\chapter{Первый автомат: Lamp}
+\label{chap:first-automaton}
+
+Начнём с простой лампы, которую можно включать и выключать.
+У неё два состояния: \code{off} и \code{on}. Команды
+\code{switch_on} и \code{switch_off} переводят лампу
+из одного состояния в другое.
+
+Дополнительно будем считать, сколько раз лампу включали.
+
+\begin{figure}[ht]
+  \centering
+  \input{figures/tikz/lamp_states}
+  \caption{Состояния и переходы лампы}
+  \label{fig:lamp}
+\end{figure}
+
+\section{Описание автомата}
+
+Автомат объявляется как Python-класс, наследующийся
+от \code{Automaton}. Внутри него определяются состояния,
+команды, действия и переходы между состояниями.
+
+\lstinputlisting[
+  caption={Объявление автомата Lamp},
+  label={lst:lamp}
+]{code/lamp.py}
+
+\subsection{Состояния и контекст}
+
+Состояния \code{off} и \code{on} определяют,
+включена лампа или выключена.
+Параметр \code{initial=True} указывает начальное
+состояние автомата.
+
+Помимо состояний, автомат может хранить дополнительные
+данные в контексте. В нашем случае \code{LampContext}
+содержит поле \code{switch_on_count} --- количество
+включений лампы.
+
+Таким образом, состояние определяет текущее поведение
+автомата, а контекст хранит связанные с ним данные.
+
+\subsection{Команды и действия}
+
+Команды \code{switch_on} и \code{switch_off} объявлены
+с помощью \code{@provided_command}. Они определяют
+события, на которые может реагировать автомат.
+
+Тела команд оставлены пустыми намеренно: команды
+не выполняют действия напрямую, а запускают переходы.
+Параметр \code{external=True} позволяет отправлять
+их извне программы.
+
+Для изменения данных контекста используются действия,
+отмеченные декоратором \code{@action}.
+
+В нашем примере \code{increment_switch_on_count}
+увеличивает счётчик включений. Параметр \code{ctx}
+предоставляет доступ к контексту автоматного объекта.
+
+Необязательный аргумент \code{text} содержит описание
+действия для диаграммы и не влияет на исполнение.
+
+\subsection{Переходы}
+
+Переходы объявляются с помощью \code{transition}.
+Каждый переход связывает исходное состояние,
+команду, действия и целевое состояние.
+
+Например, \code{turn_on} срабатывает при получении
+команды \code{switch_on} в состоянии \code{off}.
+Он увеличивает счётчик включений и переводит
+лампу в состояние \code{on}.
+
+Переход \code{turn_off} возвращает лампу в состояние
+\code{off}. Никаких дополнительных действий
+он не выполняет, поэтому параметр \code{actions}
+не указан.
+
+\section{Сборка программы}
+
+Объявленный класс описывает поведение лампы,
+но для исполнения нужно создать автоматный объект
+и включить его в программу.
+
+\begin{lstlisting}[language=Python,numbers=none]
+def build_program() -> tuple[Program, AutomatonObject]:
+    lamp = AutomatonObject("lamp", Lamp, LampContext())
+    return Program(objects=(lamp,)), lamp
+\end{lstlisting}
+
+\code{AutomatonObject} связывает имя объекта, класс
+автомата и его начальный контекст. Благодаря этому
+один класс можно использовать для создания
+нескольких независимых объектов.
+
+\code{Program} объединяет автоматные объекты
+в одну систему. Пока программа содержит только
+одну лампу, но позднее мы добавим взаимодействие
+между несколькими автоматами.
+
+Функцию \code{build_program()} удобно использовать
+как отдельную точку сборки системы. Она позволяет
+отделить создание объектов от их исполнения.
+
+\section{Запуск программы}
+
+Исполнением программы управляет \code{Runtime}.
+Он хранит текущие состояния автоматов, их контексты
+и обрабатывает поступающие команды.
+
+Создадим исполнитель и проверим начальное состояние:
+
+\begin{lstlisting}[language=Python,numbers=none]
+program, lamp = build_program()
+runtime = Runtime(program)
+
+snapshot = runtime.snapshot(lamp)
+
+assert snapshot.state is Lamp.off
+assert snapshot.context.switch_on_count == 0
+\end{lstlisting}
+
+Метод \code{snapshot} возвращает снимок текущего
+состояния объекта и его контекста. При запуске
+лампа выключена, а счётчик включений равен нулю.
+
+\subsection{Отправка команд}
+
+Чтобы включить лампу, отправим команду
+\code{switch_on} и запустим обработку:
+
+\begin{lstlisting}[language=Python,numbers=none]
+runtime.send(lamp, Lamp.switch_on)
+runtime.run()
+
+snapshot = runtime.snapshot(lamp)
+
+assert snapshot.state is Lamp.on
+assert snapshot.context.switch_on_count == 1
+\end{lstlisting}
+
+Метод \code{send} помещает команду в очередь,
+указывая её получателя. Метод \code{run}
+обрабатывает накопленные команды.
+
+Runtime выбирает переход \code{turn_on},
+выполняет его действие и переводит лампу
+в состояние \code{on}. Счётчик включений
+увеличивается до единицы.
+
+Теперь выключим лампу:
+
+\begin{lstlisting}[language=Python,numbers=none]
+runtime.send(lamp, Lamp.switch_off)
+runtime.run()
+
+snapshot = runtime.snapshot(lamp)
+
+assert snapshot.state is Lamp.off
+assert snapshot.context.switch_on_count == 1
+\end{lstlisting}
+
+Лампа возвращается в состояние \code{off},
+но счётчик не изменяется, поскольку переход
+\code{turn_off} не содержит действий.
+
+Попробуем выключить лампу ещё раз:
+
+\begin{lstlisting}[language=Python,numbers=none]
+runtime.send(lamp, Lamp.switch_off)
+runtime.run()
+\end{lstlisting}
+
+Лампа уже находится в состоянии \code{off}, а переход
+для команды \code{switch_off} определён только из
+состояния \code{on}.
+
+Поэтому Runtime не сможет обработать команду и вызовет
+исключение \code{NoTransitionError}. По умолчанию такое
+поведение считается ошибкой исполнения.
+
+При этом состояние лампы не изменится.
+
+\begin{importantbox}
+Команды не вызываются как обычные методы Python.
+Они отправляются через Runtime, который выбирает
+переход с учётом текущего состояния автомата.
+\end{importantbox}
+
+\begin{trybox}
+Добавьте команду \code{toggle}, которая переключает
+лампу в противоположное состояние.
+
+Подсказка: для одной команды можно объявить два
+перехода с разными исходными состояниями.
+\end{trybox}

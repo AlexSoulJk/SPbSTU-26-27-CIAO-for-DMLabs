@@ -1,0 +1,42 @@
+\begin{tikzpicture}[
+  automaton/.style={
+    draw=ciaoBlue,
+    fill=ciaoPaleBlue!35,
+    very thick,
+    rounded corners=2mm,
+    minimum width=42mm,
+    minimum height=23mm,
+    align=center,
+    font=\sffamily
+  },
+  connector/.style={draw=ciaoNavy,thick},
+  operation/.style={font=\ttfamily\small,align=center}
+]
+  \node[automaton] (view) {
+    {\scriptsize\color{ciaoMuted}\textless\textless ViewAutomaton\textgreater\textgreater}\\[-1mm]
+    {\bfseries SumView}
+  };
+  \node[automaton,right=68mm of view] (controller) {
+    {\scriptsize\color{ciaoMuted}\textless\textless ControllerAutomaton\textgreater\textgreater}\\[-1mm]
+    {\bfseries SumController}
+  };
+
+  % Обе половины Connection завершаются в общей точке, как при экспорте
+  % в draw.io: socket required-интерфейса принимает ball provided-интерфейса.
+  \coordinate (junction) at ($(view.east)!0.5!(controller.west)$);
+
+  % Required-половина от SumView до общего стыка.
+  \draw[connector] (view.east) -- ($(junction)+(-3mm,0)$);
+  \draw[connector]
+    ($(junction)+(0,3mm)$)
+    arc[start angle=90,end angle=270,radius=3mm];
+
+  % Provided-половина от SumController; ball касается раскрытия socket.
+  \coordinate (ball-center) at ($(junction)+(2.4mm,0)$);
+  \draw[connector]
+    (controller.west) -- ($(ball-center)+(2.4mm,0)$);
+  \draw[connector,fill=white] (ball-center) circle[radius=2.4mm];
+
+  % Экспорт draw.io подписывает всю assembly-связь один раз у её середины.
+  \node[operation,above=6mm of junction] {start};
+\end{tikzpicture}

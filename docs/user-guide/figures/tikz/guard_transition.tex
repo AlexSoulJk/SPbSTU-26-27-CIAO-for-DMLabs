@@ -1,0 +1,36 @@
+\begin{tikzpicture}[
+  state/.style={
+    draw=ciaoBlue,
+    fill=ciaoPaleBlue!45,
+    very thick,
+    rounded corners=2mm,
+    minimum width=36mm,
+    minimum height=16mm,
+    font=\sffamily\bfseries
+  },
+  flow/.style={-{Stealth[length=3mm]},thick,draw=ciaoNavy},
+  transition label/.style={
+    fill=white,
+    inner sep=2pt,
+    align=center,
+    font=\ttfamily\small
+  }
+]
+  \node[state] (running) {running};
+  \node[state,right=55mm of running] (publishing) {publishing};
+
+  % Guard-ветвь остаётся в running, поэтому показываем её self-loop.
+  \draw[flow]
+    (running) to[out=120,in=60,looseness=5]
+    node[transition label,above=1mm]
+      {[has\_next: есть следующий элемент]\\[-0.3mm]
+       / accumulate; tick}
+    (running);
+
+  % Резервная ветвь выбирается только при ложных Guard группы.
+  \draw[flow]
+    (running) --
+    node[transition label,below=2mm]
+      {[else] / complete; tick}
+    (publishing);
+\end{tikzpicture}

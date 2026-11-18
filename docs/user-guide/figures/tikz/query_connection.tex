@@ -1,0 +1,39 @@
+\begin{tikzpicture}[
+  automaton/.style={
+    draw=ciaoBlue,
+    fill=ciaoPaleBlue!35,
+    very thick,
+    rounded corners=2mm,
+    minimum width=43mm,
+    minimum height=23mm,
+    align=center,
+    font=\sffamily
+  },
+  query connector/.style={draw=ciaoQueryRed,thick},
+  operation/.style={font=\ttfamily\small,color=ciaoQueryRed}
+]
+  \node[automaton] (calculator) {
+    {\scriptsize\color{ciaoMuted}\textless\textless Automaton\textgreater\textgreater}\\[-1mm]
+    {\bfseries Calculator}
+  };
+  \node[automaton,right=67mm of calculator] (operators) {
+    {\scriptsize\color{ciaoMuted}\textless\textless Automaton\textgreater\textgreater}\\[-1mm]
+    {\bfseries OperatorTable}
+  };
+
+  % Required и provided половины Query сходятся в общем assembly-стыке.
+  \coordinate (junction) at ($(calculator.east)!0.5!(operators.west)$);
+  \draw[query connector]
+    (calculator.east) -- ($(junction)+(-3mm,0)$);
+  \draw[query connector]
+    ($(junction)+(0,3mm)$)
+    arc[start angle=90,end angle=270,radius=3mm];
+
+  \coordinate (ball-center) at ($(junction)+(2.4mm,0)$);
+  \draw[query connector]
+    (operators.west) -- ($(ball-center)+(2.4mm,0)$);
+  \draw[query connector,fill=white]
+    (ball-center) circle[radius=2.4mm];
+
+  \node[operation,above=6mm of junction] {precedence};
+\end{tikzpicture}

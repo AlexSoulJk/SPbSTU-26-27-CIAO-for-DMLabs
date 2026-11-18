@@ -1,0 +1,94 @@
+\chapter{Краткий справочник API}
+\label{app:api}
+
+Справочник перечисляет основные публичные имена из пакета \code{ciao}. Точные
+ограничения сигнатур и ошибок определяются актуальной технической спецификацией.
+
+\section{Декларация модели}
+
+\small
+\begin{tabularx}{\textwidth}{@{}p{0.36\textwidth}X@{}}
+\toprule
+Имя & Назначение \\
+\midrule
+\code{Automaton[Context]} & Базовый класс декларативного автомата. \\
+\code{ControllerAutomaton} & Роль автомата с доменной управляющей логикой. \\
+\code{ViewAutomaton} & Роль автомата-посредника между Controller и UI. \\
+\code{AutomatonContext} & База для явно передаваемого контекста. \\
+\code{State(initial, final)} & Дескриптор состояния. \\
+\code{AutomatonObject(...)} & Именованное включение автомата. \\
+\code{Program(...)} & Полная декларация исполняемой программы. \\
+\code{Connection(required, provided)} & Маршрут совместимых операций. \\
+\bottomrule
+\end{tabularx}
+
+\section{Декораторы и переходы}
+
+\begin{tabularx}{\textwidth}{@{}p{0.36\textwidth}X@{}}
+\toprule
+Имя & Назначение \\
+\midrule
+\code{@provided_command} & Входная асинхронная операция владельца. \\
+\code{@required_command} & Исходящая асинхронная зависимость. \\
+\code{@provided_query} & Синхронная реализация ответа. \\
+\code{@required_query} & Синхронная зависимость вызывающего объекта. \\
+\code{@guard} & Булево условие выбора перехода. \\
+\code{@action} & Эффект перехода; может объявлять query/emit capabilities. \\
+\code{transition(...)} & Связывает source, event, guard/actions и target. \\
+\bottomrule
+\end{tabularx}
+
+\section{Внедряемые capabilities}
+
+\begin{tabularx}{\textwidth}{@{}p{0.36\textwidth}X@{}}
+\toprule
+Тип & Назначение \\
+\midrule
+\code{Emit} & Вызов одной declared required-команды. \\
+\code{Emits} & Индексируемый набор declared required-команд. \\
+\code{Query} & Вызов одного declared required-query. \\
+\code{Queries} & Индексируемый набор declared required-queries. \\
+\bottomrule
+\end{tabularx}
+
+\section{Исполнение}
+
+\begin{tabularx}{\textwidth}{@{}p{0.36\textwidth}X@{}}
+\toprule
+Имя & Назначение \\
+\midrule
+\code{compile_program(program)} & Валидирует и компилирует декларации. \\
+\code{Runtime(...)} & Создаёт изолированный исполнитель. \\
+\code{Runtime.send(...)} & Кладёт external provided-команду в FIFO. \\
+\code{Runtime.step()} & Обрабатывает не более одного сообщения. \\
+\code{Runtime.run(max_steps=...)} & Обрабатывает очередь до остановки. \\
+\code{Runtime.snapshot(object)} & Возвращает текущий снимок объекта. \\
+\code{Runtime.trace} & Неизменяемая последовательность событий исполнения. \\
+\bottomrule
+\end{tabularx}
+
+\section{UI}
+
+\begin{tabularx}{\textwidth}{@{}p{0.36\textwidth}X@{}}
+\toprule
+Имя & Назначение \\
+\midrule
+\code{TkConnection} & Адаптер Button/endpoints/handlers для Tkinter. \\
+\code{FactoryPayloadSource} & Создаёт payload по данным Window в момент события. \\
+\code{ConstantPayloadSource} & Передаёт заранее заданный payload. \\
+\code{Subscription.dispose()} & Снимает регистрацию или освобождает адаптер. \\
+\bottomrule
+\end{tabularx}
+
+\section{Минимальная памятка}
+
+\begin{enumerate}
+  \item Объявите Context, Automaton, State, operations и transitions.
+  \item Создайте каждый \code{AutomatonObject} с уникальным именем.
+  \item Соедините required endpoints с provided endpoints.
+  \item Создайте Runtime; для ранней диагностики можно отдельно вызвать
+    \code{compile_program}.
+  \item Отправляйте только external provided-команды полным endpoint.
+  \item Анализируйте \code{StepResult}, \code{RunResult} и \code{trace}.
+\end{enumerate}
+

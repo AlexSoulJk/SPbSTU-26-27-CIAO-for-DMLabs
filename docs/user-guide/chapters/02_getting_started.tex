@@ -1,0 +1,97 @@
+
+\chapter{Установка и первый запуск}
+\label{chap:getting-started}
+
+\section{Требования}
+
+Для работы с \CIAO{} необходим Python~3.11 или новее.
+Графические примеры используют Tkinter, который обычно
+входит в стандартную поставку Python.
+
+Для экспорта диаграмм с улучшенной компоновкой
+дополнительно потребуется Node.js. Его установка
+рассмотрена ниже.
+
+\section{Установка}
+
+Скачайте проект из репозитория CIAO:
+
+\begin{lstlisting}[language={},numbers=none]
+git clone https://github.com/AlexSoulJk/SPbSTU-26-27-CIAO-for-DMLabs.git
+cd SPbSTU-26-27-CIAO-for-DMLabs
+\end{lstlisting}
+
+Откройте PowerShell в папке проекта и создайте
+виртуальное окружение:
+
+\begin{lstlisting}[language={},numbers=none]
+py -3.11 -m venv .venv
+.\.venv\Scripts\Activate.ps1
+\end{lstlisting}
+
+Установите фреймворк:
+
+\begin{lstlisting}[language={},numbers=none]
+python -m pip install -e .
+\end{lstlisting}
+
+Флаг \code{-e} позволяет изменять исходный код проекта
+без повторной установки пакета.
+
+Проверить установку можно запуском тестов:
+
+\begin{lstlisting}[language={},numbers=none]
+python -m unittest discover -s tests -v
+\end{lstlisting}
+
+\begin{resultbox}
+Если тесты завершились без ошибок, можно переходить
+к запуску примеров.
+\end{resultbox}
+
+\section{Запуск примеров}
+
+В репозитории находятся готовые приложения,
+демонстрирующие возможности фреймворка.
+
+Запустите пример вычисления суммы массива:
+
+\begin{lstlisting}[language={},numbers=none]
+python -m examples.array_sum.interactive_run
+\end{lstlisting}
+
+Или калькулятор с пошаговой визуализацией вычислений:
+
+\begin{lstlisting}[language={},numbers=none]
+python -m examples.calculator.interactive_run
+\end{lstlisting}
+
+Попробуйте управлять приложениями с помощью кнопок
+и проследить, как меняется их состояние.
+В следующих главах мы разберём, как они устроены.
+
+\section{Экспорт диаграмм в draw.io}
+
+\CIAO{} позволяет экспортировать автоматные программы
+в формат \code{.drawio}. Полученные диаграммы можно
+открывать и редактировать в \url{https://app.diagrams.net/}.
+
+Для компоновки диаграмм используется алгоритм ELK
+(Eclipse Layout Kernel), поэтому перед первым экспортом
+необходимо установить Node.js с \url{https://nodejs.org/}.
+
+После установки Node.js выполните в корне проекта:
+
+\begin{lstlisting}[language={},numbers=none]
+npm install
+\end{lstlisting}
+
+Для экспорта диаграмм готовых примеров запустите:
+
+\begin{lstlisting}[language={},numbers=none]
+python examples\export_drawio.py
+\end{lstlisting}
+
+Готовые файлы появятся в каталоге
+\RepoPath{examples/schemas/generated_drawio/}.
+Их можно открыть в draw.io для просмотра или редактирования.

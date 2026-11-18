@@ -1,0 +1,213 @@
+
+\chapter{Guards, Queries и выбор перехода}
+\label{chap:guards-queries}
+
+До сих пор мы рассматривали переходы, которые
+определялись текущим состоянием автомата и поступившей
+командой. Однако иногда для одной команды необходимо
+предусмотреть несколько вариантов поведения.
+
+Для этого в CIAO используются условия Guard.
+Они позволяют выбирать переход на основе данных
+контекста или результатов запросов к другим автоматам.
+
+\section{Условные переходы}
+
+Рассмотрим упрощённый фрагмент Array Sum.
+При получении команды \code{tick} автомат должен
+проверить, остались ли элементы для обработки.
+
+\begin{lstlisting}[language=Python,numbers=none]
+@guard(text="есть следующий элемент")
+def has_next(self, ctx: SumContext) -> bool:
+    return ctx.index < len(ctx.values)
+
+on_tick = transition(
+    source=running,
+    event=tick,
+    guard=has_next,
+    actions=(accumulate,),
+    target=running,
+)
+
+on_complete = transition(
+    source=running,
+    event=tick,
+    otherwise=True,
+    actions=(complete,),
+    target=publishing,
+)
+\end{lstlisting}
+
+Метод \code{has_next} объявлен с помощью
+\code{@guard} и возвращает \code{bool}.
+Его результат определяет, можно ли выполнить
+переход \code{on_tick}.
+
+Если элементов больше нет, выбирается резервная
+ветвь \code{on_complete}, обозначенная
+\code{otherwise=True}. Она выполняется, только
+когда ни один Guard группы не вернул \code{True}.
+
+На диаграмме это выглядит следующим образом:
+
+\noindent\begin{minipage}{\textwidth}
+  \centering
+  \input{figures/tikz/guard_transition}
+  \captionof{figure}{Guard и резервная ветвь группы переходов}
+  \label{fig:guard-transition}
+\end{minipage}
+
+\subsection{Правила выбора перехода}
+
+Переходы с одинаковыми \code{source} и \code{event}
+образуют одну группу. При обработке команды Runtime
+проверяет все Guard этой группы в порядке объявления.
+
+Возможны следующие результаты:
+
+\begin{itemize}
+  \item Один Guard вернул \code{True} ---
+    выбирается соответствующий переход.
+  \item Несколько Guard вернули \code{True} ---
+    возникает \code{AmbiguousTransitionError}.
+  \item Все Guard вернули \code{False} ---
+    выбирается ветвь \code{otherwise}, если она есть.
+\end{itemize}
+
+Таким образом, порядок объявления переходов
+не задаёт их приоритет. Условия должны исключать
+одновременный выбор нескольких ветвей.
+
+Если условная группа не содержит \code{otherwise},
+компилятор модели CIAO выдаёт предупреждение
+\code{MissingOtherwiseWarning}. Когда все условия
+ложны, Runtime обрабатывает ситуацию как отсутствие
+подходящего перехода.
+
+\begin{importantbox}
+Guard должен только проверять условие, не изменяя
+контекст автомата. Изменения следует выполнять
+в Action выбранного перехода.
+\end{importantbox}
+
+\section{Синхронные запросы}
+
+Иногда для проверки условия или выполнения действия
+автомату нужны данные другого объекта.
+
+Например, при обработке математического выражения
+калькулятору может потребоваться узнать приоритет
+операции.
+
+Для таких обращений предусмотрены Query.
+В отличие от команд, они выполняются сразу
+и возвращают результат в текущий обработчик.
+
+\begin{lstlisting}[language=Python,numbers=none]
+@required_query
+def precedence(self, symbol: str) -> int: ...
+
+@action(query=precedence)
+def inspect(self, ctx: Context, query: Query) -> None:
+    priority = query(symbol=ctx.current_symbol)
+\end{lstlisting}
+
+Операция \code{precedence} объявлена как
+\code{required_query}. Она задаёт параметры запроса
+и тип возвращаемого значения.
+
+Декоратор \code{@action(query=precedence)}
+указывает, какой запрос используется действием.
+При этом в сигнатуре обработчика обязателен
+параметр типа \code{Query}.
+
+Теперь объявим предоставляемую операцию в другом
+автомате --- \code{OperatorTable}:
+
+\begin{lstlisting}[language=Python,numbers=none]
+@provided_query
+def precedence(self, symbol: str) -> int:
+    priorities = {
+        "+": 1, "-": 1,
+        "*": 2, "/": 2,
+    }
+    return priorities.get(symbol, 0)
+\end{lstlisting}
+
+В отличие от \code{required_query}, предоставляемый
+запрос содержит реализацию. Здесь он возвращает
+приоритет переданного арифметического оператора.
+
+Для взаимодействия операции связываются через
+\code{Connection}, как и обычные команды:
+
+\begin{lstlisting}[language=Python,numbers=none]
+Connection(
+    (calculator, Calculator.precedence),
+    (operators, OperatorTable.precedence),
+)
+\end{lstlisting}
+
+На диаграмме это выглядит следующим образом:
+
+\noindent\begin{minipage}{\textwidth}
+  \centering
+  \input{figures/tikz/query_connection}
+  \captionof{figure}{Синхронное Query-соединение \code{precedence}}
+  \label{fig:query-connection}
+\end{minipage}
+
+Когда Calculator вызывает \code{query(...)},
+Runtime направляет запрос объекту \code{operators}
+и возвращает результат его обработчику.
+
+Запросы можно использовать не только в Action,
+но и в Guard:
+
+\begin{lstlisting}[language=Python,numbers=none]
+@guard(query=precedence)
+def check_priority(
+    self, ctx: Context, query: Query
+) -> bool:
+    return query(symbol=ctx.current_symbol) > 0
+\end{lstlisting}
+
+Если обработчику требуется несколько разных
+запросов, используется \code{queries=(...)}
+и параметр типа \code{Queries}.
+
+Конкретная операция выбирается по её объявлению:
+
+\begin{lstlisting}[language=Python,numbers=none]
+priority = queries[self.precedence](symbol="+")
+\end{lstlisting}
+
+Как и для \code{Emit}, соответствие объявленных
+операций и параметров обработчика проверяется
+при компиляции модели CIAO.
+
+\subsection{Особенности Query}
+
+Query выполняется синхронно, без добавления
+сообщения в FIFO. Принимающий автомат отвечает
+обычным Python-методом, объявленным через
+\code{@provided_query}.
+
+При этом запрос не запускает переход и не изменяет
+состояние принимающего автомата.
+
+Объекты \code{Query} и \code{Queries} доступны только
+во время вызова соответствующего Guard или Action.
+Сохранять их в контексте для последующего
+использования нельзя.
+
+\begin{importantbox}
+Query рекомендуется использовать только для чтения
+данных. Хотя Runtime не запрещает изменять контекст
+внутри \code{provided_query}, такие изменения
+не откатываются автоматически при ошибках.
+
+Если требуется изменить состояние другого автомата,
+используйте Command и явно объявленный переход.
+\end{importantbox}

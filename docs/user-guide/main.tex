@@ -1,0 +1,31 @@
+\documentclass[a4paper,11pt,oneside]{report}
+
+% main.tex содержит только композицию документа. Все пакеты и стили находятся
+% в preamble.tex, а изменяемые сведения об издании — в metadata.tex.
+\input{metadata}
+\input{preamble}
+
+\begin{document}
+
+\hypersetup{pageanchor=false}
+\input{titlepage}
+\hypersetup{pageanchor=true}
+\pagenumbering{roman}
+\tableofcontents
+\clearpage
+\pagenumbering{arabic}
+
+\include{chapters/01_introduction}
+\include{chapters/02_getting_started}
+\include{chapters/03_first_automaton}
+\include{chapters/04_connections}
+\include{chapters/05_runtime}
+\include{chapters/06_guards_queries}
+\include{chapters/07_user_interface}
+\include{chapters/08_calculator}
+\include{chapters/09_common_mistakes}
+
+\appendix
+\include{appendices/api_reference}
+
+\end{document}

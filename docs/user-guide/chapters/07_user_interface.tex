@@ -1,0 +1,175 @@
+
+\chapter{Пользовательский интерфейс}
+\label{chap:user-interface}
+
+CIAO позволяет создавать приложения с графическим
+интерфейсом на основе Tkinter.
+
+При этом логика автоматов отделяется от элементов
+интерфейса. Кнопки отправляют команды, а автоматы
+передают данные, которые необходимо отобразить.
+
+Рассмотрим организацию интерфейса на примере
+Array Sum.
+
+\section{Взаимодействие с интерфейсом}
+
+В приложении используются три основных компонента:
+
+\begin{itemize}
+  \item \code{Controller} выполняет вычисления
+    и управляет их последовательностью.
+  \item \code{ViewAutomaton} связывает вычисления
+    с пользовательским интерфейсом.
+  \item \code{Window} содержит Tkinter-виджеты
+    и отвечает за их отображение.
+\end{itemize}
+
+View объявляется наследником \code{ViewAutomaton}
+и работает с командами так же, как обычный автомат.
+
+\section{Привязка Window к View}
+
+Для взаимодействия с автоматом Window предоставляет
+кнопки, методы чтения пользовательского ввода и
+методы отображения данных.
+
+View, в свою очередь, объявляет два вида внешних операций:
+\code{provided} для приёма событий и \code{required}
+для передачи данных интерфейсу.
+
+Их связывает \code{TkConnection}.
+
+\begin{figure}[ht]
+\centering
+\begin{tikzpicture}[
+  component/.style={
+    draw=ciaoRule,
+    fill=ciaoCodeBg,
+    rounded corners=1mm,
+    minimum width=40mm,
+    minimum height=22mm,
+    align=center,
+    font=\small\sffamily
+  },
+  flow/.style={
+    -{Stealth[length=2mm]},
+    draw=ciaoBlue,
+    thick
+  }
+]
+  \node[component] (window) at (0,0) {
+    \textbf{Window}\\
+    init\_button\\
+    render\_data()
+  };
+
+  \node[component] (view) at (10,0) {
+    \textbf{SumView}\\
+    init\_clicked\\
+    render\_data
+  };
+
+  \draw[flow]
+    ([yshift=5mm]window.east) --
+    node[above,font=\scriptsize] {bind\_event}
+    ([yshift=5mm]view.west);
+
+  \draw[flow]
+    ([yshift=-5mm]view.west) --
+    node[below,font=\scriptsize] {bind\_command}
+    ([yshift=-5mm]window.east);
+\end{tikzpicture}
+\caption{Два направления привязки Window и View}
+\label{fig:ui-binding}
+\end{figure}
+
+\subsection{От Window к View}
+
+Привяжем кнопку запуска к внешней provided-команде
+\code{SumView.init_clicked}:
+
+\begin{lstlisting}[language=Python,numbers=none]
+connection.bind_event(
+    window.init_button,
+    (sample.view, SumView.init_clicked),
+    payload_source=FactoryPayloadSource(
+        StartInput, window.read_start_input
+    ),
+)
+\end{lstlisting}
+
+При нажатии кнопки \code{FactoryPayloadSource}
+вызывает \code{window.read_start_input()} и формирует
+объект \code{StartInput}.
+
+Затем \code{TkConnection} отправляет команду
+\code{init_clicked} автомату View через Runtime.
+View обрабатывает её как обычное событие автомата
+и при необходимости передаёт команды Controller.
+
+\subsection{От View к Window}
+
+Для обновления интерфейса View объявляет внешнюю
+required-команду \code{render_data}. Она связывается
+с методом Window:
+
+\begin{lstlisting}[language=Python,numbers=none]
+connection.bind_command(
+    (sample.view, SumView.render_data),
+    window.render_data,
+)
+\end{lstlisting}
+
+Когда View отправляет \code{render_data} через Emit,
+\code{TkConnection} вызывает зарегистрированный
+метод \code{window.render_data(...)} с переданными
+данными.
+
+Window обновляет соответствующие виджеты,
+не обращаясь к контексту автомата.
+
+Таким же образом можно подключить команды
+\code{render_controls} и \code{render_status}
+для управления кнопками и отображения статуса.
+
+\begin{importantbox}
+Обработчики кнопок не назначаются напрямую через
+Tkinter \code{command=}. Их регистрирует
+\code{TkConnection}.
+
+На одну кнопку допускается одна CIAO-привязка,
+а на внешнюю required-операцию --- не более
+одного обработчика.
+\end{importantbox}
+
+
+\section{Исполнение и обработка ошибок}
+
+При нажатии кнопки \code{TkConnection} отправляет
+команду в Runtime и планирует её обработку через
+механизм \code{after()} библиотеки Tkinter.
+
+Каждый запланированный вызов выполняет один
+\code{Runtime.step()}. Это позволяет обрабатывать
+очередь постепенно, сохраняя возможность
+обновлять интерфейс между шагами.
+
+Если во время исполнения возникает ошибка,
+\code{TkConnection} останавливает обработку
+и передаёт сведения о ней в
+\code{BaseWindow.show_error}.
+
+По умолчанию окно может показать сообщение об ошибке,
+но этот метод можно переопределить для собственного
+способа отображения.
+
+\begin{notebox}
+Tkinter-виджеты необходимо обновлять из потока,
+в котором работает окно. Не запускайте
+\code{Runtime.run()} непосредственно из обработчиков
+кнопок, подключённых через \code{TkConnection}.
+
+Если подключение завершается до закрытия окна,
+освободите его с помощью \code{dispose()}.
+\end{notebox}

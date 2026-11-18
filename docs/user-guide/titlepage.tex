@@ -1,0 +1,36 @@
+\begin{titlepage}
+  \thispagestyle{empty}
+  \begin{tikzpicture}[remember picture,overlay]
+    \fill[ciaoNavy] (current page.north west)
+      rectangle ([yshift=-11.2cm]current page.north east);
+    \fill[ciaoBlue] ([xshift=2.3cm,yshift=-5.6cm]current page.north west)
+      circle[radius=0.42cm];
+    \draw[ciaoBlue,line width=2.4pt]
+      ([xshift=2.72cm,yshift=-5.6cm]current page.north west)
+      -- ([xshift=6.4cm,yshift=-5.6cm]current page.north west);
+  \end{tikzpicture}
+
+  \vspace*{1.15cm}
+  {\sffamily\bfseries\color{white}\fontsize{15}{18}\selectfont USER GUIDE\par}
+  \vspace{1.3cm}
+  {\sffamily\bfseries\color{white}\fontsize{28}{33}\selectfont
+    CIAO для лабораторных\\работ\par}
+  \vspace{0.45cm}
+  {\sffamily\color{ciaoPaleBlue}\fontsize{17}{22}\selectfont
+    \GuideSubtitle\par}
+
+  \vfill
+  \begin{minipage}{0.72\textwidth}
+    \sffamily
+    \textcolor{ciaoMuted}{Путь от первого состояния до системы
+    взаимодействующих Controller и View.}
+  \end{minipage}
+
+  \vspace{1.4cm}
+  \begin{tabular}{@{}ll@{}}
+    \textcolor{ciaoMuted}{Статус} & \GuideStatus \\
+    \textcolor{ciaoMuted}{Автор} & \GuideAuthor \\
+    \textcolor{ciaoMuted}{Дата сборки} & \GuideDate
+  \end{tabular}
+  \vspace*{1.0cm}
+\end{titlepage}
